@@ -1,0 +1,4 @@
+# The site that just docs builds
+docs/_site/
+# Python caches of the lab and the helper script
+__pycache__/

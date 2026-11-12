@@ -1,0 +1,48 @@
+{
+  "schema": "https://rahuldave.github.io/agent_skill_package_maker/schema/skill-package.v1.json",
+  "version": 1,
+  "repository": {
+    "owner": "rahuldave",
+    "name": "jnprofile-rust",
+    "url": "https://github.com/rahuldave/jnprofile-rust"
+  },
+  "skills": [
+    {
+      "name": "rust-profile",
+      "path": ".agents/skills/rust-profile"
+    }
+  ],
+  "install_extras": {
+    "files": [
+      ".agents/just/rust",
+      ".agents/targets/rust"
+    ]
+  },
+  "executables": {
+    "required": [
+      {
+        "name": "cargo",
+        "check": "cargo --version",
+        "description": "Builds, checks, formats and tests the code, with the rustup components clippy and rustfmt."
+      },
+      {
+        "name": "cargo-llvm-cov",
+        "check": "cargo llvm-cov --version",
+        "description": "Writes the coverage of the tests. It needs the rustup component llvm-tools-preview."
+      },
+      {
+        "name": "just",
+        "check": "just --version"
+      },
+      {
+        "name": "uv",
+        "check": "uv --version",
+        "description": "Runs diff-cover and the helper script of the steps."
+      }
+    ],
+    "optional": []
+  },
+  "npx": {
+    "supported": false
+  }
+}

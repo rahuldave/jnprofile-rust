@@ -1,0 +1,46 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: jnprofile-rust
+  favicon: favicon.svg
+  description: "The Rust profile of jnterfaces: rustfmt, clippy, cargo check, cargo llvm-cov and diff-cover"
+  site-url: https://rahuldave.github.io/jnprofile-rust/
+  repo-url: https://github.com/rahuldave/jnprofile-rust
+  repo-subdir: docs
+  repo-actions: [source, issue]
+  page-navigation: true
+  navbar:
+    left:
+      - href: index.md
+        text: Home
+      - href: tools.md
+        text: Tools
+      - href: jnterfaces-entry.md
+        text: The jnterfaces entry
+    right:
+      - text: Projects
+        menu:
+          - text: jnterfaces
+            href: https://rahuldave.github.io/jnterfaces/
+          - text: jnprofile-python
+            href: https://rahuldave.github.io/jnprofile-python/
+          - text: jnprofile-typescript
+            href: https://rahuldave.github.io/jnprofile-typescript/
+          - text: jnprofile-rust
+            href: https://rahuldave.github.io/jnprofile-rust/
+          - text: agent_gest_git_skills
+            href: https://rahuldave.github.io/agent_gest_git_skills/
+    tools:
+      - icon: github
+        href: https://github.com/rahuldave/jnprofile-rust
+  page-footer:
+    left: "Part of [jnterfaces](https://rahuldave.github.io/jnterfaces/) and its packages."
+    right: "Built with [smalldocs](https://docs.smallish.dev/)."
+
+theme:
+  light: litera-reading
+  dark: darkly-reading
+toc: true
+code-copy: true

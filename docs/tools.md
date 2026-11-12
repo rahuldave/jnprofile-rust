@@ -1,0 +1,77 @@
+---
+title: The tools
+---
+
+Each tool of the profile brings its recipes. No tool adds a crate to `Cargo.toml`. The tools are the programs `cargo`, `cargo-llvm-cov` and `uv` of the machine. The recipes have no shebang line, so each line of a recipe runs through the shell of its module, `.agents/just/rust.just`. When that module sets `jlog` as its shell, the run log has each line. A `set shell` in the root Justfile does not reach the recipes of a module.
+
+The steps run cargo with `--locked`, so a step never makes or changes `Cargo.lock`. Run `just setup` to make the file or to bring it up to date, and commit it. The steps also run with `--all-features`, so the code behind each feature counts. Code behind a feature that cannot be on together with another feature, or code for another platform, such as `#[cfg(windows)]` on macOS, does not count.
+
+## The base
+
+Every project of the profile gets the base, even a project with no tool.
+
+| Recipe | What it does |
+|---|---|
+| `just setup` | Downloads every dependency with `cargo fetch`, and makes or updates `Cargo.lock` |
+| `just build` | Builds every package of the workspace. Extra arguments go to cargo: `just build --release` |
+
+The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. The leading `/` keeps a module folder such as `src/target/` in git. That file lists the ignored files that a command can make again. Every report of a step goes to `target/`, so a step leaves no file that git sees.
+
+## lint
+
+| Recipe | What it does |
+|---|---|
+| `just fmt` | Formats the code of every package with `cargo fmt --all` |
+| `just fmt-check` | Checks the format with `cargo fmt --all --check`, and changes no file |
+| `just lint` | Runs `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`. Extra arguments go to cargo: `just lint -p app` |
+
+## typecheck
+
+| Recipe | What it does |
+|---|---|
+| `just typecheck` | Checks the types of the code and the tests with `cargo check --workspace --all-targets --all-features --locked` |
+
+## test
+
+| Recipe | What it does |
+|---|---|
+| `just test` | Runs the tests with `cargo llvm-cov test`, and writes the coverage to `target/llvm-cov/lcov.info`. Extra arguments go to cargo llvm-cov test, so `just test parse` runs the tests whose names hold `parse` |
+| `just coverage-check` | Runs `test` again, then fails on each changed line of code that no test runs |
+| `just test-paths PATH...` | Runs the tests of some files with `cargo test`, without coverage |
+
+`cargo llvm-cov` writes the coverage as an LCOV file, a text format that lists how often each line ran. `diff-cover` is a Python program that compares such a file with the diff of git.
+
+`coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes. The step runs `test` first, so it never reads an old report. On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step runs `cargo llvm-cov report --fail-under-lines 100`, which checks every line of the code.
+
+`diff-cover` counts only the files that are in the report. `cargo llvm-cov` leaves out a file that no test target compiles, such as a file that no `mod` line names, or a file in `examples/`. It also leaves out each file in a folder named `tests`, `examples` or `benches`, at any depth, for example `src/tests/mod.rs`.
+
+So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, and the files of the two lists. On the first commit, `cargo llvm-cov report` checks only the files in the report. The build script `build.rs` is in the report.
+
+LLVM counts the code of a `macro_rules!` macro at the line that calls the macro. So a branch of a macro that no test runs does not fail `coverage-check`, and the `test-review` target checks it.
+
+`test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file of a package, such as `src/lib.rs` with a tests module, runs all the tests of that package.
+
+## docstring
+
+| Recipe | What it does |
+|---|---|
+| `just docstring-check` | Fails on each item with no doc comment, public or private, and names its file and line |
+
+The step runs `cargo clippy` with the lints `missing_docs` and `clippy::missing_docs_in_private_items`, with every feature. It checks the code of the libraries and the binaries, and not the tests. The spec gives the two lints with `-D`, which makes each one an error. The step gives them with `-W` and reads the JSON messages of clippy instead, for two reasons. An error in a library stops clippy from checking the binaries that use it, and a generated file must not fail the step.
+
+The step also passes `--cap-lints warn`. So a crate that sets `#![deny(missing_docs)]` still gets the list of items, and a generated file in such a crate still passes. An item in a file that git ignores, such as code that `build.rs` writes into `target/`, counts as generated. An `#[allow(missing_docs)]` in the code wins over the lints of the command line, so it hides its items from the step. The `review` target checks each new `#[allow]`. Each line of its output has the form `src/lib.rs:18:4: missing documentation for a function`.
+
+## Lines that no test can run
+
+Stable Rust has no pragma that leaves out one line from the coverage. So the profile reads two lists of files:
+
+- **`.agents/coverage-exclude.txt`** lists the files that `coverage-check` leaves out.
+- **`.agents/generated.txt`** lists the generated files. Both `coverage-check` and `docstring-check` leave them out.
+
+Each line of a list is a path or a glob, with the rules of git pathspecs. A `*` does not match a `/`, `**` matches any number of folders, and a path that ends with `/` names a folder. A line that starts with `#` is a comment. Write the reason for each entry in a comment above it.
+
+The steps read both lists from the parent commit, with `git show HEAD:./PATH`, which names the path from the top of the project. So a new entry counts only after it is in a commit of its own, and a commit cannot exempt its own code. With no parent, both lists are empty. The `test-review` target judges each new entry.
+
+## The helper script
+
+The recipes of `coverage-check`, `docstring-check` and `test-paths` run `.agents/just/rust/steps.py` with `uv`. The script needs Python 3.11 or later and no package. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in `target/jnprofile-rust/`. It also reads the JSON messages of clippy, and prints each item with no doc. `coverage-check` runs `diff-cover` 11.0.1 with `uv run --with`.

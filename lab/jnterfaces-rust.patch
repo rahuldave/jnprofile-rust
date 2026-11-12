@@ -1,0 +1,63 @@
+--- a/scripts/install_stack.py
++++ b/scripts/install_stack.py
+@@ -169,7 +169,7 @@
+           and string_list(profile.get('remove')) and isinstance(tools, dict) and tools
+           and string_list(profile.get('default_tools', [])) and set(profile.get('default_tools', [])) <= set(tools)
+           and isinstance(profile.get('choices', {}), dict) and set(profile.get('choices', {})) <= set(choices)
+-          and profile.get('manifest') in ('pyproject.toml', 'package.json')
++          and profile.get('manifest') in ('pyproject.toml', 'package.json', 'Cargo.toml')
+           and isinstance(init, dict)
+           and (not init or (plain_path(init.get('file')) and string_list(init.get('command')) and init['command']))
+           and (profile.get('uv_default_groups') is None or isinstance(profile['uv_default_groups'], str)
+@@ -180,7 +180,7 @@
+           and all(plain_path(k) and plain_path(v) for k, v in base.get('files', {}).items())
+           and lines_ok(base)
+           and all(re.fullmatch(r'[a-z][a-z0-9_-]*', tool_name) for tool_name in tools)
+-          and all(isinstance(tool, dict) and string_list(tool.get('packages')) and tool['packages']
++          and all(isinstance(tool, dict) and string_list(tool.get('packages'))
+                   and isinstance(tool.get('files', {}), dict)
+                   and all(plain_path(k) and plain_path(v) for k, v in tool.get('files', {}).items())
+                   and lines_ok(tool) and parts_ok(tool)
+@@ -901,6 +901,10 @@
+             groups = tomllib.loads(path.read_text()).get('dependency-groups', {})
+             entries = groups.get(group, []) if isinstance(groups, dict) else []
+             return {normal_name(item, profile) for item in entries if isinstance(item, str)}
++        if manifest == 'Cargo.toml':
++            # cargo add --dev puts a crate in [dev-dependencies]. A tool of the rust profile may have no crate.
++            table = tomllib.loads(path.read_text()).get('dev-dependencies', {})
++            return set(table) if isinstance(table, dict) else None
+         data = json.loads(path.read_text())
+         lists = {kind: set(data[kind]) if isinstance(data.get(kind), dict) else set()
+                  for kind in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies')}
+@@ -943,6 +947,11 @@
+             if tool in profile['tools']:
+                 entry = profile['tools'][tool]
+                 group = entry.get('group', tool)
++                if not entry['packages']:
++                    # A tool with no packages, as each tool of the rust profile, needs no read of the project file.
++                    steps.append(('add', name, tool, None, entry.get('files', {}), entry,
++                                  (owner_key(name, profile, tool), []), None))
++                    continue
+                 present = present_packages(target, profile, group)
+                 if present is None:
+                     steps.append(('add', name, tool, None, {}, entry, (owner_key(name, profile, tool), []),
+@@ -1522,7 +1531,8 @@
+                 continue
+             for first in entry.get('before', []):
+                 print('Would run: ' + ' '.join(first))
+-            print('Would run: ' + ' '.join(command) if command else f'The project already has the packages of {tool}')
++            print('Would run: ' + ' '.join(command) if command else f'The project already has the packages of {tool}'
++                  if entry.get('packages') else f'{tool} needs no packages')
+         after = {}
+         sync_files(target, profiles, [n for n in active if n not in leaving], tools, active, True, parts, roles,
+                    gone_roles, unsure, migrating, after=after)
+@@ -1645,7 +1655,8 @@
+                           file=sys.stderr)
+                     failed = subprocess.run(command, cwd=target, env=project_env()).returncode
+                 else:
+-                    print(f'The project already has the packages of {tool} for {profile}', file=sys.stderr)
++                    print(f'The project already has the packages of {tool} for {profile}' if entry.get('packages')
++                          else f'{tool} for {profile} needs no packages', file=sys.stderr)
+         except (OSError, StackError) as exc:
+             failed = str(exc)
+         except BaseException:

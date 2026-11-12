@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "name": "rust",
+  "about": "a Rust project with Cargo",
+  "detect": [
+    "Cargo.toml"
+  ],
+  "manifest": "Cargo.toml",
+  "init": {
+    "file": "Cargo.toml",
+    "command": [
+      "cargo",
+      "init",
+      "--vcs",
+      "none"
+    ]
+  },
+  "choices": {
+    "tasker": true,
+    "prose": true
+  },
+  "add": [
+    "cargo",
+    "add",
+    "--dev"
+  ],
+  "remove": [
+    "cargo",
+    "remove",
+    "--dev"
+  ],
+  "code": [
+    "**/*.rs"
+  ],
+  "tools": {
+    "lint": {
+      "packages": [],
+      "recipes": "lint.just",
+      "verify": [
+        "fmt-check",
+        "lint"
+      ]
+    },
+    "typecheck": {
+      "packages": [],
+      "recipes": "typecheck.just",
+      "verify": [
+        "typecheck"
+      ]
+    },
+    "test": {
+      "packages": [],
+      "recipes": "test.just",
+      "verify": [
+        "test",
+        "coverage-check"
+      ]
+    },
+    "docstring": {
+      "packages": [],
+      "recipes": "docstring.just",
+      "verify": [
+        "docstring-check"
+      ]
+    }
+  },
+  "default_tools": [
+    "lint",
+    "typecheck",
+    "test",
+    "docstring"
+  ],
+  "base": {
+    "recipes": "base.just",
+    "lines": {
+      ".gitignore": [
+        "/target/",
+        "*.profraw"
+      ],
+      ".worktreedisposable": [
+        "# cargo build makes target/ again from the code and Cargo.lock.",
+        "/target/"
+      ]
+    }
+  }
+}
