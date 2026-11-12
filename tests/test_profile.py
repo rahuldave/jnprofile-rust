@@ -54,6 +54,17 @@ class Profile(unittest.TestCase):
         self.assertIn(patch.strip(), doc)
 
 
+class Spec(unittest.TestCase):
+    def test_the_spec_and_the_docs_agree_on_w_for_docstring_check(self):
+        spec = (REPO / 'docs/spec.md').read_text()
+        self.assertIn('`cargo clippy` with `-W missing_docs`', spec)
+        self.assertIn('--cap-lints warn', spec)
+        for page in ['README.md', 'docs/index.md', 'docs/tools.md', 'docs/jnterfaces-entry.md',
+                     '.agents/skills/rust-profile/SKILL.md']:
+            self.assertNotIn('spec gives the two lints with `-D`', (REPO / page).read_text(), page)
+        self.assertIn('--cap-lints', (REPO / '.agents/just/rust/steps.py').read_text())
+
+
 class Lint(unittest.TestCase):
     def test_the_recipes_of_the_profile_pass_the_lint(self):
         self.assertEqual([p for path in sorted((REPO / '.agents/just/rust').glob('*.just'))

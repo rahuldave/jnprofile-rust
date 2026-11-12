@@ -114,7 +114,7 @@ anything. When one is missing, it stops and prints the install line.
 | `just` | All recipes | `cargo install just` or the system package manager. |
 | `uv` | Python, the installer, smalldocs, nossaifd, the plugins | https://docs.astral.sh/uv/ |
 | `jlog` | The run log, as the shell of each recipe | `git clone https://github.com/rahuldave/jlog`, then `just install` in the clone. |
-| `jagt` | Agentic targets | `cargo install --git https://github.com/rahuldave/jagt` |
+| `jagt` | Agentic targets. Version 0.3.0 or later, for the nonce. | `cargo install --git https://github.com/rahuldave/jagt` |
 | `gest` | The task tracker, from the fork of rahuldave | `git clone https://github.com/rahuldave/gest`, then `cargo install --path gest --locked`. On 2026-11-12, `cargo install --git` of the fork failed at the checkout with "the repository is not empty". |
 | `gh` | Publishing, GitHub issues | https://cli.github.com/ |
 | `jq` | The agent hooks | The system package manager. |
@@ -176,10 +176,24 @@ just check     fmt-check lint typecheck test coverage-check integration docstrin
     runs counts when `integration` is in `just check`. When the setup answer
     puts `integration` only in `just verify`, such a line needs a pragma or an
     exclude, or the person moves `integration` back into `just check`.
-  - **No old report.** `coverage-check` depends on `test`, and on
-    `integration` when it is in the list. `just` runs each recipe once in one
-    call, so in `just check` the tests run once. Alone, `just coverage-check`
-    runs them again, so it never reads a report of another tree.
+  - **No old report.** The index of jnterfaces calls `just` once for each
+    language and step, so a dependency of one module recipe cannot keep the
+    tests from running twice. A run ID does.
+    - **Where the ID comes from.** The root Justfile has the line
+      `export JLOG_RUN := env("JLOG_RUN", uuid())`. The first `just` call
+      makes the ID, and each `just` call inside it inherits it. A module gets
+      the ID of the root. A module must not have the line, because `env()`
+      reads the process environment, so the module would make a second ID.
+    - **The ID is bound to a tree.** A person can set `JLOG_RUN` by hand. So
+      `jlog` writes the worktree tree with the first line of a run. `jlog pass`
+      and `coverage-check` reject a run whose first tree is not the current
+      worktree tree. An old run of the same tree is a valid run.
+    - **Who uses it.** `jlog` writes `JLOG_RUN` as the run ID of each line,
+      so the steps of one `just check` share one run, even in inner `just`
+      calls. `jlog pass` reads the lines of that run.
+      `test` and `integration` write it into their reports. `coverage-check`
+      reads a report only when its run ID matches. Otherwise it runs the tests
+      itself.
   - **Lines left out.** In Python and TypeScript, a line can be left out with
     the pragma of its tool, `# pragma: no cover` or `/* c8 ignore next */`.
     Stable Rust has no pragma for a line, so the Rust profile reads an exclude
@@ -207,8 +221,15 @@ just check     fmt-check lint typecheck test coverage-check integration docstrin
     eslint-plugin-jsdoc, set for all classes, methods, functions and arrow
     functions, exported or not. Biome has no rule for a missing JSDoc
     comment, so the profile adds eslint for this one step.
-  - **Rust:** `cargo clippy` with `-D missing_docs` and
-    `-D clippy::missing_docs_in_private_items`.
+  - **Rust:** `cargo clippy` with `-W missing_docs` and
+    `-W clippy::missing_docs_in_private_items`, with `--cap-lints warn`. The
+    step reads the JSON messages of clippy, and fails on each item with no doc
+    outside `generated.txt`. It does not use `-D`, for two reasons. `-D` fails
+    on a generated file too. It also stops clippy before it checks the
+    binaries that use a failing library.
+  - **A suppression in the code,** such as `#[allow(missing_docs)]` in Rust,
+    beats the command line. The docs lens of `review` gives a finding for each
+    new one that has no reason.
   - **Its output** lists each item with no doc, with its file and line. The
     author agent writes the docs from this list. No target writes them.
 - **`diff-check`** runs `git diff --cached --check HEAD`, so it checks the
@@ -218,10 +239,15 @@ just check     fmt-check lint typecheck test coverage-check integration docstrin
     through `jlog`. The test and typecheck recipes of both profiles have
     shebang lines now, so the profiles change.
   - A line with a `-` prefix, which ignores a failure.
-  - `[no-cd]` or `working-directory`, which change the folder in which `jlog`
-    looks for the log folder.
-- **`prose-check`** runs the nossaifd `check.py` on the changed Markdown. For
-  the API pages, it runs `smalldocs api module NAME` for each changed module
+  - `[no-cd]`, or a `[working-directory]` attribute on a recipe. Each changes
+    the folder in which `jlog` looks for the log folder. The setting
+    `set working-directory` that the installer writes into a module, to the top
+    of the project, is allowed.
+- **`prose-check`** runs the nossaifd `check.py` on the changed pages. A page
+  is a file that `is_page` of nossaifd's `prose_gate.py` accepts, so
+  `prose-check` and the turn gate use one rule. It takes `.md` and `.qmd`
+  files, and it skips files such as `AGENTS.md`, `CHANGELOG.md` and the folder
+  `.agents/`. For the API pages, it runs `smalldocs api module NAME` for each changed module
   into a temporary file, and checks that file. It writes nothing into the
   repository. When `check.py` is missing, the step fails and prints the install
   line.
@@ -331,10 +357,20 @@ Each packet has these parts:
 - **The inputs:** the diff, the input tree and the arguments of the recipe.
 - **The required outputs:** the fields that the result must have, for example
   `findings` and `status`.
-- **A nonce:** a random value. `jagt render` saves the nonce, the target, the
-  input tree, the path of the worktree and the hash of the packet in
-  `packets/<nonce>.json` in the shared log folder. The result must hold the same
-  nonce.
+- **A nonce:** a random value of 32 lowercase hex digits, whose first digit is
+  a letter. It is the one random part of a packet. The rest of the packet text
+  is the same for the same inputs. `jagt render` saves the version of the file
+  form, the nonce, the target, the input tree, the path of the worktree and the
+  hash of the packet in `packets/<nonce>.json` in the shared log folder.
+  - **In the packet and the result,** the nonce is a top-level field,
+    `nonce:`. The fresh agent copies it from the packet into its
+    `AGENT_RESULT v1`.
+  - **The check.** Before the hook or `just record` writes a record, it runs
+    `jagt result lint --expect-target <target> --expect-nonce <nonce>`. A
+    result with another nonce, with none, or with two `nonce` fields gives no
+    record.
+  - **Without a record.** `jagt render --no-save` gives the text only, with no
+    nonce and no file, for demos and labs.
 
 The first agentic targets:
 
@@ -354,6 +390,10 @@ Before it writes its packet, the `test-review` recipe runs a logged line,
   repository, with `git worktree add --detach`.
 - It copies each added or changed test file in, runs the `test-paths` recipe
   of the profile on them, and removes the worktree.
+- A Rust unit test lives in the file of its code. Copying that file copies the
+  new code too, so a pass proves nothing. The Rust profile gives only the files
+  under `tests/` to `test-paths`, and `test-review` judges the unit tests from
+  the diff alone.
 - It writes the result, with the output of the tests, to
   `test-parent/<run>.json` in the log folder. It exits with 0 when tests fail,
   because a new test that fails on the parent is the expected case. It exits
@@ -433,6 +473,25 @@ only place for them.
   no files, so they can run in either order on the same tree.
 - **What a record must hold.** A record counts only if its status is
   `success`, and each finding is fixed with a test or has a reason not to fix it.
+- **The turn gate of nossaifd stays, with a different job.** nossaifd has its
+  own hooks, `UserPromptSubmit` and `Stop`, in Claude Code and Codex. At the end
+  of a turn, the `Stop` hook blocks once when a page that the turn changed has
+  a hard problem or no recorded pass.
+  - **The jobs.** The turn gate asks early, inside a turn, at little cost. The
+    commit gate decides. Only the `prose` record and the `prose-check` step let
+    a commit through.
+  - **One store of page passes.** nossaifd records the pass of a page with
+    `prose_gate.py record`, in `nossaifd/` under `git rev-parse
+    --git-common-dir`. Every worktree shares it. The store stays there, with or
+    without the gates, so it needs no migration.
+  - **The `prose` target records each page.** The fresh agent of `just prose`
+    runs `prose_gate.py record` for each page that it passed. So a page that
+    `just prose` passed does not block a later turn.
+  - **A page pass is not a `prose` record.** The gate needs the `prose` record
+    of the tree, from the fresh agent.
+  - **When the gates are installed,** `.agents/stack.json` lists the tasker
+    role. Then the message of the `Stop` block says "run `just prose`". The
+    steps by hand alone give a page pass, but no `prose` record.
 - **The records are in the shared log folder,** in `records/`. A fresh agent can
   work in another worktree, for example in the parallel work of the `gor`
   skill. The packet holds the path of its worktree, so the hook computes the
@@ -482,6 +541,9 @@ one JSON line to the run log:
  "start": "2026-11-12T10:00:00Z", "end": "2026-11-12T10:00:04Z"}
 ```
 
+- **The run ID.** The field `run` is `JLOG_RUN` when it is set. Without it,
+  `run` is the process ID of the parent `just` and its start time, as in the
+  example. The section "The steps" says where `JLOG_RUN` comes from.
 - **Where `set shell` goes.** The installer writes the profiles as modules of
   just. A module has its own settings, so the installer writes `set shell` into
   each module file that it makes, and into `.agents/install.just`. It also
@@ -721,8 +783,8 @@ check: fmt-check lint typecheck test coverage-check integration docstring-check 
   ```text
   review       **
   test-review  @code
-  docs         docs/**  README.md  **/*.md  @api
-  prose        docs/**  README.md  **/*.md  @api
+  docs         @pages  @api
+  prose        @pages  @api
   ```
 
   - **The default.** When the file is missing, the gate uses these lines.
@@ -732,8 +794,12 @@ check: fmt-check lint typecheck test coverage-check integration docstring-check 
     package `pkg.sub`, it is `src/pkg/sub/**` or `pkg/sub/**`, whichever
     exists, plus the `check` globs of the `api` settings. The `api` tool of
     each profile defines `@api` for its language. Only Python has one now.
+  - **`@pages`** names the files that `is_page` of nossaifd accepts. So
+    `AGENTS.md` and `CHANGELOG.md` need no `prose` record. Without the
+    `nossaifd` role, `@pages` is `**/*.md` and `**/*.qmd`.
   - **`@code`** names the source files of each language in `.agents/stack.json`.
-    Each profile gives its globs, for example `**/*.py`, `**/*.ts` or
+    Each profile gives its globs under the key `code` of `profile.json`, for
+    example `**/*.py`, `**/*.ts` or
     `**/*.rs`. With no profile, `@code` is empty.
   - **Which file counts.** The gate reads `required.txt`, `.agents/stack.json`
     and `.agents/generated.txt` from the parent of the commit, so a commit
@@ -813,7 +879,14 @@ adds to:
 | `.pre-commit-config.yaml` | The tasker role | A `local` hook that runs the gate. The writer keys the entries of `repos` by `repo`, so all `local` entries share one key. `formats.json` changes to key a `local` entry by the `id` of its hook. |
 | `.claude/settings.json` | The tasker role | The hooks `SessionStart`, `SubagentStop` and `PreToolUse`. The hooks of GitButler go: `Stop` with `gitbutler-snapshot.sh`, and `gitbutler-vcs-context.sh`. |
 | `.codex/hooks.json` | The tasker role | The hooks `SessionStart`, `SubagentStop` and `PreToolUse`. The GitButler hooks and text go. |
+| `.claude/settings.json`, `.codex/hooks.json` | The `nossaifd` role | The turn gate of nossaifd, `UserPromptSubmit` and `Stop`, as now. |
 | The smalldocs config | The `docs` tool and the `api` tool | The site settings, and the `api` settings. `formats.json` needs a new entry for this file. |
+
+The `nossaifd` role also writes `.github/workflows/nossaifd-prose.yml`, as a
+`seed` and as a `starter`. Each is a whole file, not a piece. When the tasker
+role is installed, `just check` in CI runs `prose-check`. So the installer
+removes that file, whichever entry wrote it, and does not write it again while
+the tasker role is installed.
 
 The run log, the packets and the records are not pieces. The runs write them,
 in the log folders.
@@ -833,9 +906,13 @@ in the log folders.
 | The names `coverage-check` and `docstring-check`, as no-op steps, and the empty `.agents/generated.txt` and `.agents/coverage-exclude.txt` | jnterfaces |
 | The entry `rust` in the `profiles` of `stack.json` | jnterfaces |
 | The `test-paths` recipe of each profile | each profile |
+| The line `export JLOG_RUN` in the root Justfile, and not in a module | jnterfaces |
+| `JLOG_RUN` as the run ID of each line of the run log, and the tree of the first line of a run | jlog |
+| The run ID in the coverage reports, and the match in `coverage-check` | each profile |
 | The recipe `test-parent` | agent_gest_git_skills |
 | The `api` tool of TypeScript, after the smalldocs release that reads JSDoc | jnprofile-typescript |
-| The base task of `prose`, and `check.py` | nossaifd |
+| The base task of `prose`, `check.py`, `is_page`, and the turn gate with its message when the gates are installed | nossaifd |
+| The removal of `nossaifd-prose.yml` when the tasker role is installed, and the rule that keeps a reinstall from writing it again | jnterfaces, in the installer |
 | `jlog`, and the plugins, one folder and one uv project for each harness | jlog |
 | The gate, the git hooks, the agent hooks, the agentic targets with their base tasks, `just record` | agent_gest_git_skills |
 | The removal of GitButler from the hooks, the skills and the docs | agent_gest_git_skills |
@@ -944,7 +1021,7 @@ needs it.
 - The text of `.agents/targets/review.md` appears in the review packet.
 - `jagt render` saves `packets/<nonce>.json` with the target, the input tree,
   the path of the worktree and the hash of the packet. A result with another
-  nonce gives no record.
+  nonce, or with none, gives no record.
 - The record shows the model of the fresh agent, in Claude Code and in Codex.
 - The same review gate works in Claude Code and in Codex.
 - `just visual-check` and `just visualize` each write a packet that
@@ -982,6 +1059,21 @@ needs it.
 - In a Python project, the gate runs as a local hook of the pre-commit
   framework, and removing the `lint` tool keeps the gate.
 
+**The turn gate of nossaifd:**
+
+- A page that `just prose` passed, in any worktree, does not block the end of
+  a later turn.
+- A page with a recorded pass and no `prose` record still stops a commit that
+  needs a `prose` record.
+- With the tasker role installed, the `Stop` block says "run `just prose`".
+- When the tasker role is installed, `nossaifd-prose.yml` is removed. Without
+  it, the file stays as now.
+- A reinstall of nossaifd after the tasker role does not bring back
+  `nossaifd-prose.yml`.
+- `prose-check` and the turn gate accept the same pages, a `.qmd` file
+  included. A change to `CHANGELOG.md` alone needs no `prose` record.
+- The removal of the GitButler `Stop` hook keeps the nossaifd `Stop` hook.
+
 **Tests and docstrings:**
 
 - In each of the three profiles, a changed line that no test runs fails
@@ -1001,8 +1093,17 @@ needs it.
   another tool of a language.
 - In a repository with no `just check`, each skill of the table in "The
   skills" tells the agent to run `gsu`.
-- `just coverage-check` alone runs the tests again, and does not read an old
-  report.
+- In `just check`, the tests of each language run once, and the run log
+  shows one `JLOG_RUN` for all lines.
+- `jlog pass` finds each step of `just check` when the index runs the steps in
+  inner `just` calls.
+- A recipe of a module shows the `JLOG_RUN` of the root.
+- `JLOG_RUN` set by hand to the ID of an old run of another tree gives no pass,
+  and `coverage-check` does not read that run's report.
+- `coverage-check` does not read a report with another run ID. So
+  `just coverage-check` alone runs the tests again.
+- In Rust, an item with no doc in a file of `generated.txt` passes
+  `docstring-check`, and one outside it fails, with its file and line.
 - A path in `.agents/generated.txt` fails neither `coverage-check` nor
   `docstring-check`.
 - On the first commit, `coverage-check` runs the report tool of the profile
@@ -1025,7 +1126,8 @@ needs it.
   function with no docments fails `just check`.
 - Until the smalldocs release that reads JSDoc, a new TypeScript project with
   the `docs` tool passes `just check`, with no `api` step.
-- `prose-check` runs `check.py` on the changed Markdown, and writes nothing
+- `prose-check` runs `check.py` on the changed pages, the files that `is_page`
+  accepts, and writes nothing
   into the repository. When `check.py` is missing, the step fails and prints
   the install line.
 - In a Python project with the `api` tool, `prose-check` also checks the API

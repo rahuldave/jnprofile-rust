@@ -67,7 +67,7 @@ A full run of `just test`, with no arguments, takes the worktree tree before the
 |---|---|
 | `just docstring-check` | Fails on each item with no doc comment, public or private, and names its file and line |
 
-The step runs `cargo clippy` with the lints `missing_docs` and `clippy::missing_docs_in_private_items`, with every feature. It checks the code of the libraries and the binaries, and not the tests. The spec gives the two lints with `-D`, which makes each one an error. The step gives them with `-W` and reads the JSON messages of clippy instead, for two reasons. An error in a library stops clippy from checking the binaries that use it, and a generated file must not fail the step.
+The step runs `cargo clippy` with the lints `missing_docs` and `clippy::missing_docs_in_private_items`, with every feature. It checks the code of the libraries and the binaries, and not the tests. As the spec says, the step gives the two lints with `-W`, not `-D`, and reads the JSON messages of clippy. It has two reasons. An error in a library stops clippy from checking the binaries that use it, and a generated file must not fail the step.
 
 The step also passes `--cap-lints warn`. So a crate that sets `#![deny(missing_docs)]` still gets the list of items, and a generated file in such a crate still passes. An item in a file that git ignores, such as code that `build.rs` writes into `target/`, counts as generated. An `#[allow(missing_docs)]` in the code wins over the lints of the command line, so it hides its items from the step. The `review` target checks each new `#[allow]`. Each line of its output has the form `src/lib.rs:18:4: missing documentation for a function`.
 
