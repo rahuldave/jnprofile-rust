@@ -5,10 +5,9 @@ These rules add to the base task for the Rust tests of the change.
 - **Where the tests are.** A unit test is in a module `#[cfg(test)] mod tests` in the file of its code. An
   integration test is a file in `tests/`, and it uses only the public API of the crate. A test of a private
   function belongs in the unit tests.
-- **Test-parent and unit tests.** A unit test is in the same file as its code. So when `test-parent` copies a
-  changed source file into the parent commit, it also copies the new code. A unit test that passes there does not
-  show that it passed on the old code. Judge such a test by reading it, and do not count the result of
-  `test-parent` for it.
+- **Test-parent and unit tests.** A unit test is in the same file as its code. A copy of that file in the parent
+  commit brings the new code too, so `test-paths` runs only the files in `tests/`. Judge each new unit test from
+  the diff alone.
 - **Each test checks a result.** A test calls `assert!`, `assert_eq!` or `assert_ne!`, or it returns a `Result`
   and uses `?` on a value that it checks. A test that only calls the code and checks nothing is a finding.
   `#[should_panic]` names the text of the panic with `expected = "..."`.

@@ -100,13 +100,13 @@ The tests of jnterfaces need a profile `rust` in `PROFILES` and in `RECORDS_PROF
 
 ## What jnterfaces reads from the profile
 
-- **The key `code`** of `profile.json` holds the `@code` globs, here `**/*.rs`. The gate reads them for the required targets. No code of jnterfaces reads the key yet, so the name of the key is a proposal.
+- **The key `code`** of `profile.json` holds the `@code` globs, here `**/*.rs`. The gate reads them for the required targets. The user approved the name `code`. No code of jnterfaces reads the key yet. The Python and TypeScript profiles need the same key.
 - **The step names** are the recipe names. The profile gives `fmt-check`, `lint`, `typecheck`, `test`, `coverage-check` and `docstring-check`, and also `test-paths` for the `test-parent` recipe.
 - **The key `verify`** of each tool lists the steps of the tool, so `just rust verify` runs all six steps today.
 - **The folder `.agents/targets/rust/`** is an extra of `skill-package.json`, so the installer copies it as it copies `.agents/just/rust/`.
 
 ## Problems for jnterfaces
 
-- **The module sets `working-directory`.** The installer writes `set working-directory := '../..'` into each module, so that the recipes run at the top of the project. The lint of steps in the spec forbids `working-directory`. The recipes of this profile need the top of the project as their folder, so jnterfaces must give them that folder in another way before the lint can pass.
+- **The module sets `working-directory`.** The installer writes `set working-directory := '../..'` into each module, so that the recipes run at the top of the project. The spec allows that setting in a module, and it forbids only a `[working-directory]` attribute on a recipe. The recipes of this profile need the setting.
 - **A module does not take the shell of the root Justfile.** With just 1.50, a `set shell` in the root Justfile reaches the recipes of the root and of its imports, but not the recipes of a `mod`. The recipes of the profile are in the module `rust.just`, so the installer must write `set shell` into that file, as the spec says. The lab checks the recipes with a stand-in `jlog` and a `set shell` in the module.
-- **The combined recipes run the tests twice.** The index runs `just --justfile ... rust test` and `just --justfile ... rust coverage-check` as two calls of `just`. `coverage-check` depends on `test`, so `just check` runs the tests twice. The spec says that `just` runs each recipe once in one call, and that holds only inside one call.
+- **The run ID.** The index runs `just --justfile ... rust test` and `just --justfile ... rust coverage-check` as two calls of `just`, so a dependency of `coverage-check` on `test` would run the tests twice. The spec now gives each run of `just` one run ID. The root Justfile has the line `export JLOG_RUN := env("JLOG_RUN", uuid())`, and no module may have it. `test` saves the run ID and the worktree tree next to its report, and `coverage-check` reads the report only when both match. Otherwise it runs the tests itself. So jnterfaces must write the line into the root Justfile. Without it, `coverage-check` runs the tests each time, and `just rust verify` runs them twice.

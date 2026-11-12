@@ -41,7 +41,9 @@ does not.
   --locked`.
 - **`test`** runs the tests with `cargo llvm-cov test`, and writes the coverage to
   `target/llvm-cov/lcov.info`.
-- **`coverage-check`** runs `test` again, then `diff-cover` against `HEAD`.
+- **`coverage-check`** runs `diff-cover` against `HEAD`. It reads the report
+  of `test` only when `test` of the same run of `just`, `JLOG_RUN`, wrote it
+  for the same tree. Otherwise it runs the tests first.
   `diff-cover` compares the coverage report, an LCOV file, with the diff of
   git. The step fails on each changed line, staged, unstaged or untracked,
   that no test runs. It also fails on each changed `.rs` file that is not in
@@ -57,8 +59,9 @@ does not.
   generated file can be left out. A file that git ignores, such as code that
   `build.rs` writes into `target/`, counts as generated.
 - **`test-paths PATH...`** runs the tests of some files with `cargo test`.
-  A file `tests/NAME.rs` runs the test target `NAME`. Any other file of a
-  package runs all the tests of that package.
+  A file `tests/NAME.rs` runs the test target `NAME`. Any other file in the
+  folder `tests` runs every test target of that folder. It skips a file of
+  code, such as `src/lib.rs`, because its unit tests live with the new code.
 
 ## Lines that no test can run
 
@@ -85,7 +88,7 @@ profile reads a list of files instead:
   diff --check`.
 - **Extra arguments** go to the tool, for example `just test parse` runs the
   tests whose names hold `parse`. A filtered run writes a partial coverage
-  report. So `coverage-check` runs `test` again, with no arguments.
+  report and saves no run ID. So `coverage-check` then runs all the tests.
 
 ## Where the files are
 

@@ -1,7 +1,8 @@
 """The helper of the steps of the rust profile: coverage-check, docstring-check and test-paths.
 
-The recipes in this folder run it with uv: python steps.py coverage LCOV, python steps.py docs, and
-python steps.py test-paths PATH.... It needs Python 3.11 or later and no package. The step coverage-check also
+The recipes in this folder run it with uv: python steps.py coverage LCOV, docs, fresh, begin ARG..., stamp, and
+test-paths PATH.... begin, stamp and fresh tie the coverage report to the run ID JLOG_RUN of the root Justfile and to the
+worktree tree, so that coverage-check reads the report of test only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also
 needs diff-cover, which it runs with uv.
 
 The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through
@@ -12,13 +13,18 @@ the project, which can be a subfolder of the git repository.
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 DIFF_COVER = 'diff-cover==11.0.1'
 GENERATED = '.agents/generated.txt'
 COVERAGE_EXCLUDE = '.agents/coverage-exclude.txt'
+REPORT = Path('target/llvm-cov/lcov.info')
+RUN = Path('target/llvm-cov/run.json')
+PENDING = Path('target/llvm-cov/run.pending')
 DOC_LINTS = ('missing_docs', 'clippy::missing_docs_in_private_items')
 WORK = Path('target/jnprofile-rust')
 
@@ -99,6 +105,89 @@ def ignored(path):
     if path.startswith('/') or path.startswith('../'):
         return True
     return git('check-ignore', '--quiet', '--', path).returncode == 0
+
+
+def worktree_tree():
+    """The tree hash of every file of the worktree, staged or not, that git does not ignore, or None on an error.
+
+    It uses a temporary index of its own, as the spec of the commit gates says, so neither the real index nor a
+    second run at the same time changes. The folder target of the project never counts. A file that git cannot
+    index, such as a nested repository with no commit, gives None, and git's message goes to the error output.
+    """
+    WORK.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(dir=WORK, suffix='.index')
+    os.close(handle)
+    index = Path(name).resolve()
+    index.unlink()
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    try:
+        if has_parent():
+            subprocess.run(['git', 'read-tree', 'HEAD'], env=env, check=True, capture_output=True)
+        # git refuses to name an ignored path, even to exclude it, so the exclude is only for a target that git sees.
+        specs = [':/'] if ignored('target') else [':/', ':(exclude)target']
+        subprocess.run(['git', 'add', '-A', '--', *specs], env=env, check=True, capture_output=True)
+        return subprocess.run(['git', 'write-tree'], env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        print(f'steps.py: git cannot compute the worktree tree: {(exc.stderr or b"").decode(errors="replace").strip()}',
+              file=sys.stderr)
+        return None
+    finally:
+        index.unlink(missing_ok=True)
+        Path(str(index) + '.lock').unlink(missing_ok=True)
+
+
+def begin(args):
+    """Save the run ID and the worktree tree before a run of the tests, in target/llvm-cov/run.pending.
+
+    Only a run of all the tests, with no ARGS, inside a run of just that has JLOG_RUN saves them. Any other run
+    saves nothing, so coverage-check runs the tests again. Returns the exit code, always 0.
+    """
+    RUN.unlink(missing_ok=True)
+    PENDING.unlink(missing_ok=True)
+    run = os.environ.get('JLOG_RUN', '')
+    tree = worktree_tree() if not args and run else None
+    if tree:
+        PENDING.parent.mkdir(parents=True, exist_ok=True)
+        PENDING.write_text(json.dumps({'run': run, 'tree': tree}) + '\n')
+    return 0
+
+
+def stamp():
+    """After the tests passed, keep the saved run as target/llvm-cov/run.json when the tree did not change.
+
+    A change to a file while the tests ran means that the report may come from the old code, so the run is dropped.
+    Returns the exit code, always 0.
+    """
+    try:
+        saved = json.loads(PENDING.read_text())
+    except (OSError, ValueError):
+        return 0
+    finally:
+        PENDING.unlink(missing_ok=True)
+    if isinstance(saved, dict) and saved.get('tree') and saved['tree'] == worktree_tree():
+        RUN.write_text(json.dumps(saved) + '\n')
+    else:
+        print('test: a file changed while the tests ran, so coverage-check runs them again', file=sys.stderr)
+    return 0
+
+
+def fresh():
+    """True when the report of the tests comes from this run of just, JLOG_RUN, and from the current worktree tree.
+
+    A person can set JLOG_RUN by hand, so the tree must match too. An old run of the same tree is a valid run.
+    """
+    run = os.environ.get('JLOG_RUN', '')
+    try:
+        saved = json.loads(RUN.read_text())
+    except (OSError, ValueError):
+        saved = None
+    if (run and isinstance(saved, dict) and saved.get('run') == run and REPORT.is_file()
+            and saved.get('tree') and saved['tree'] == worktree_tree()):
+        print(f'coverage-check: the tests of this run, {run}, wrote the report, so they do not run again')
+        return True
+    print('coverage-check: no report of this run and this tree, so the tests run now', flush=True)
+    return False
 
 
 def changed_code():
@@ -245,34 +334,44 @@ def package_of(path):
 
 
 def test_commands(paths):
-    """The cargo test commands for PATHS, one for each package, in the order of the paths.
+    """The cargo test commands for PATHS, one for each package, in the order of the paths, and the skipped paths.
 
-    A file tests/NAME.rs of a package runs as the test target NAME. Any other file of a package, for example
-    src/lib.rs with a tests module, or tests/common/mod.rs, runs every test target of the package.
+    Only a file in the folder tests of a package counts. A file tests/NAME.rs runs as the test target NAME. Any
+    other file there, for example tests/common/mod.rs, runs every test target of that folder, with --test '*'. A
+    unit test lives in the file of its code, such as src/lib.rs. A copy of that file in the parent commit brings
+    the new code too, so the test proves nothing there, and test-paths skips the file.
     """
-    targets = {}
+    targets, skipped = {}, []
     for path in paths:
         if not Path(path).is_file():
             raise SystemExit(f'test-paths: {path} is not a file')
         name, folder = package_of(path)
         parts = Path(os.path.realpath(path)).relative_to(folder).parts
+        if len(parts) < 2 or parts[0] != 'tests':
+            skipped.append(path)
+            continue
         chosen = targets.setdefault(name, [])
-        if len(parts) == 2 and parts[0] == 'tests' and parts[1].endswith('.rs'):
+        if len(parts) == 2 and parts[1].endswith('.rs'):
             chosen.append(['--test', parts[1][:-3]])
         else:
-            chosen.append(['--tests'])
+            chosen.append(['--test', '*'])
     commands = []
     for name, chosen in targets.items():
-        args = ['--tests'] if ['--tests'] in chosen else [arg for pair in dict.fromkeys(map(tuple, chosen))
-                                                          for arg in pair]
+        every = ['--test', '*'] in chosen
+        args = ['--test', '*'] if every else [arg for pair in dict.fromkeys(map(tuple, chosen)) for arg in pair]
         commands.append(['cargo', 'test', '--locked', '--all-features', '--package', name, *args])
-    return commands
+    return commands, skipped
 
 
 def test_paths(paths):
     """Run the tests of PATHS without coverage, and return the exit code of the first command that fails."""
-    for command in test_commands(paths):
-        print(' '.join(command), flush=True)
+    commands, skipped = test_commands(paths)
+    for path in skipped:
+        print(f'test-paths: skips {path}, which is not in the folder tests of a package', flush=True)
+    if not commands:
+        print('test-paths: no file in the folder tests of a package, so no test ran', flush=True)
+    for command in commands:
+        print(shlex.join(command), flush=True)
         code = subprocess.run(command).returncode
         if code:
             return code
@@ -280,14 +379,20 @@ def test_paths(paths):
 
 
 def main(argv):
-    """Run the command that ARGV names: coverage LCOV, docs, or test-paths PATH..., and return its exit code."""
+    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, or test-paths PATH...: its exit code."""
     if len(argv) == 2 and argv[0] == 'coverage':
         return coverage(argv[1])
     if argv == ['docs']:
         return docs()
+    if argv == ['fresh']:
+        return 0 if fresh() else 1
+    if argv[:1] == ['begin']:
+        return begin(argv[1:])
+    if argv == ['stamp']:
+        return stamp()
     if len(argv) >= 2 and argv[0] == 'test-paths':
         return test_paths(argv[1:])
-    print('usage: steps.py coverage LCOV | docs | test-paths PATH...', file=sys.stderr)
+    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths PATH...', file=sys.stderr)
     return 2
 
 

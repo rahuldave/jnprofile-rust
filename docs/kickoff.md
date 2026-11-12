@@ -31,7 +31,7 @@ The Rust profile, with the real steps for a Cargo project:
 - **The modules** in `.agents/just/rust/`. They fill `fmt-check`, `lint`, `typecheck`, `test`, `coverage-check` and `docstring-check`, as the spec says:
   - `fmt-check` runs `cargo fmt --check`.
   - `lint` runs `cargo clippy` with `-D warnings`.
-  - `docstring-check` uses `-D missing_docs` and `-D clippy::missing_docs_in_private_items`.
+  - `docstring-check` uses `-D missing_docs` and `-D clippy::missing_docs_in_private_items`. Later note: the user approved `-W` with `--cap-lints warn` instead, and the spec now says so.
   - `coverage-check` uses `cargo llvm-cov` and `diff-cover`.
   - No recipe has a shebang line, so each line runs through `jlog`.
 - **The language layer** in `.agents/targets/rust/`. It holds short Rust rules for the `review`, `test-review`, `docs` and `prose` targets, for example the `# Examples` and `# Errors` sections of a doc comment.

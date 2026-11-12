@@ -1,4 +1,5 @@
 """Tests of the helper script .agents/just/rust/steps.py, without cargo."""
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / '.agents/just/rust'))
@@ -174,7 +176,7 @@ class Repository(unittest.TestCase):
             self.assertEqual(steps.coverage('target/llvm-cov/lcov.info'), 1)
         self.assertIn('write tests', err.getvalue())
 
-    def test_test_paths_picks_the_target_of_each_test_file(self):
+    def test_test_paths_picks_the_target_of_each_test_file_and_skips_code_files(self):
         (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/*"]\n')
         for name in ('one', 'two'):
             (self.root / f'crates/{name}/tests/common').mkdir(parents=True)
@@ -186,14 +188,118 @@ class Repository(unittest.TestCase):
             (self.root / f'crates/{name}/tests/common/mod.rs').write_text('')
         self.assertEqual(steps.test_commands(['crates/one/tests/api.rs', 'crates/one/tests/more.rs',
                                               'crates/one/tests/api.rs', 'crates/two/src/lib.rs']),
-                         [[*CARGO_TEST, 'one', '--test', 'api', '--test', 'more'], [*CARGO_TEST, 'two', '--tests']])
-        self.assertEqual(steps.test_commands(['crates/one/tests/api.rs', 'crates/one/tests/common/mod.rs']),
-                         [[*CARGO_TEST, 'one', '--tests']])
+                         ([[*CARGO_TEST, 'one', '--test', 'api', '--test', 'more']], ['crates/two/src/lib.rs']))
+        self.assertEqual(steps.test_commands(['crates/one/tests/api.rs', 'crates/two/tests/common/mod.rs']),
+                         ([[*CARGO_TEST, 'one', '--test', 'api'], [*CARGO_TEST, 'two', '--test', '*']], []))
+        self.assertEqual(steps.test_commands(['crates/one/tests/common/mod.rs', 'crates/one/tests/api.rs']),
+                         ([[*CARGO_TEST, 'one', '--test', '*']], []))
         with self.assertRaises(SystemExit):
             steps.test_commands(['crates/one/tests/none.rs'])
         (self.root / 'loose.rs').write_text('')
         with self.assertRaises(SystemExit):
             steps.test_commands(['loose.rs'])
+
+    def run_tests(self, run, args=(), change=None):
+        """Stand in for test: begin, a test run that writes the report and may change a file, then stamp."""
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'JLOG_RUN': run} if run else {}), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            if not run:
+                os.environ.pop('JLOG_RUN', None)
+            steps.begin(list(args))
+            steps.REPORT.parent.mkdir(parents=True, exist_ok=True)
+            steps.REPORT.write_text('SF:x\nend_of_record\n')
+            if change:
+                change()
+            steps.stamp()
+        return out.getvalue()
+
+    def is_fresh(self, run):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {'JLOG_RUN': run} if run else {}), contextlib.redirect_stdout(out):
+            if not run:
+                os.environ.pop('JLOG_RUN', None)
+            return steps.fresh()
+
+    def commit_one(self):
+        (self.root / '.gitignore').write_text('/target/\n')
+        self.files('src/lib.rs')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'one')
+
+    def test_the_stamp_ties_the_report_to_the_run_and_the_tree(self):
+        self.commit_one()
+        self.run_tests('run-a')
+        self.assertTrue(self.is_fresh('run-a'))
+        self.assertFalse(self.is_fresh('run-b'))
+        self.assertFalse(self.is_fresh(None))
+        (self.root / 'src/lib.rs').write_text('// changed\n')
+        self.assertFalse(self.is_fresh('run-a'))
+        self.run_tests('run-a')
+        self.assertTrue(self.is_fresh('run-a'))
+        self.run_tests('run-a', args=['parse'])
+        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(self.is_fresh('run-a'))
+        self.run_tests(None)
+        self.assertFalse(steps.RUN.exists())
+        staged = subprocess.run(['git', 'diff', '--cached', '--name-only'], cwd=self.root, capture_output=True,
+                                text=True).stdout
+        self.assertEqual(staged, '')
+
+    def test_a_file_changed_while_the_tests_run_drops_the_run(self):
+        self.commit_one()
+        out = self.run_tests('run-a', change=lambda: (self.root / 'src/lib.rs').write_text('pub fn x() {}\n'))
+        self.assertIn('a file changed while the tests ran', out)
+        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(self.is_fresh('run-a'))
+
+    def test_a_missing_report_is_not_fresh(self):
+        self.commit_one()
+        self.run_tests('run-a')
+        steps.REPORT.unlink()
+        self.assertFalse(self.is_fresh('run-a'))
+
+    def test_the_folder_target_does_not_count_in_the_tree_even_when_git_sees_it(self):
+        self.files('src/lib.rs')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'one')
+        tree = steps.worktree_tree()
+        self.files('target/llvm-cov/lcov.info')
+        self.assertEqual(steps.worktree_tree(), tree)
+        self.run_tests('run-a')
+        self.assertTrue(self.is_fresh('run-a'))
+
+    def test_a_file_that_git_cannot_index_gives_no_run_and_no_crash(self):
+        self.commit_one()
+        subprocess.run(['git', 'init', '-q', 'nested'], cwd=self.root, check=True)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(steps.worktree_tree())
+        self.assertIn('cannot compute the worktree tree', err.getvalue())
+        self.run_tests('run-a')
+        self.assertFalse(steps.RUN.exists())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(self.is_fresh('run-a'))
+
+    def test_trees_at_the_same_time_do_not_share_an_index(self):
+        self.commit_one()
+        want = steps.worktree_tree()
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            got = list(pool.map(lambda _: steps.worktree_tree(), range(12)))
+        self.assertEqual(got, [want] * 12)
+
+    def test_test_paths_says_when_no_test_ran_and_quotes_the_star(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('src/lib.rs', 'benches/b.rs', 'tests/common/mod.rs')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(steps.test_paths(['src/lib.rs', 'benches/b.rs']), 0)
+        self.assertIn('skips benches/b.rs, which is not in the folder tests of a package', out.getvalue())
+        self.assertIn('no file in the folder tests of a package, so no test ran', out.getvalue())
+        with mock.patch.object(steps.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                contextlib.redirect_stdout(out):
+            steps.test_paths(['tests/common/mod.rs'])
+        self.assertIn("--package app --test '*'", out.getvalue())
 
     def test_main_names_the_usage_for_unknown_commands(self):
         err = io.StringIO()

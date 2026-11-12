@@ -36,12 +36,12 @@ The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.wo
 | Recipe | What it does |
 |---|---|
 | `just test` | Runs the tests with `cargo llvm-cov test`, and writes the coverage to `target/llvm-cov/lcov.info`. Extra arguments go to cargo llvm-cov test, so `just test parse` runs the tests whose names hold `parse` |
-| `just coverage-check` | Runs `test` again, then fails on each changed line of code that no test runs |
-| `just test-paths PATH...` | Runs the tests of some files with `cargo test`, without coverage |
+| `just coverage-check` | Fails on each changed line of code that no test runs. It runs the tests first, unless `test` of the same run wrote the report |
+| `just test-paths PATH...` | Runs the tests of some files in the folder `tests`, with `cargo test` and without coverage |
 
 `cargo llvm-cov` writes the coverage as an LCOV file, a text format that lists how often each line ran. `diff-cover` is a Python program that compares such a file with the diff of git.
 
-`coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes. The step runs `test` first, so it never reads an old report. On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step runs `cargo llvm-cov report --fail-under-lines 100`, which checks every line of the code.
+`coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes. It reads the report of `test` only for the same run ID and the same worktree tree. On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step runs `cargo llvm-cov report --fail-under-lines 100`, which checks every line of the code.
 
 `diff-cover` counts only the files that are in the report. `cargo llvm-cov` leaves out a file that no test target compiles, such as a file that no `mod` line names, or a file in `examples/`. It also leaves out each file in a folder named `tests`, `examples` or `benches`, at any depth, for example `src/tests/mod.rs`.
 
@@ -49,7 +49,17 @@ So `coverage-check` also fails on each changed `.rs` file that is not in the rep
 
 LLVM counts the code of a `macro_rules!` macro at the line that calls the macro. So a branch of a macro that no test runs does not fail `coverage-check`, and the `test-review` target checks it.
 
-`test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file of a package, such as `src/lib.rs` with a tests module, runs all the tests of that package.
+## The run ID
+
+The root Justfile of a project has the line `export JLOG_RUN := env("JLOG_RUN", uuid())`. So each run of `just`, such as `just check`, has one run ID, and each inner call of `just` gets the same ID. A module must not have the line, because a second line would make a second ID.
+
+A full run of `just test`, with no arguments, takes the worktree tree before the tests run. The worktree tree is the tree hash of every file that git does not ignore, staged or not, without the folder `target`. When the tests pass and the tree has not changed, `test` saves `JLOG_RUN` and the tree in `target/llvm-cov/run.json`. A file that changed while the tests ran drops the run, because the report may come from the old code.
+
+`coverage-check` reads the report only when both match the current run and the current tree. So in `just check` the tests run once. Alone, `just coverage-check` runs the tests itself, and so does a run after `just test parse`.
+
+## test-paths
+
+`test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file in the folder `tests`, such as `tests/common/mod.rs`, runs every test target of that folder. A unit test lives in the file of its code, such as `src/lib.rs`. A copy of that file in the parent commit brings the new code too, so `test-paths` skips the file and says so.
 
 ## docstring
 

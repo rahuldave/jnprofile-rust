@@ -392,8 +392,53 @@ class RustLab(unittest.TestCase):
         (self.dir / 'tests/api.rs').write_text(API_TEST.replace('2);', '3);'))
         self.assertNotEqual(self.just('test-paths', 'tests/api.rs').returncode, 0)
         done = self.just('test-paths', 'src/lib.rs')
-        self.assertIn('cargo test --locked --all-features --package app --tests', done.stdout)
-        self.assertIn('add_sums_two_numbers', self.out(done))
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('test-paths: skips src/lib.rs', done.stdout)
+        self.assertNotIn('cargo test', done.stdout)
+
+    def test_coverage_check_reads_the_report_of_test_only_in_the_same_run_and_tree(self):
+        report = self.dir / 'target/llvm-cov/lcov.info'
+        env = dict(os.environ, JLOG_RUN='run-one')
+        self.assertEqual(self.just('test', env=env).returncode, 0)
+        before = report.stat().st_mtime_ns
+        done = self.just('coverage-check', env=env)
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('so they do not run again', done.stdout)
+        self.assertEqual(report.stat().st_mtime_ns, before)
+        for other in (dict(os.environ, JLOG_RUN='run-two'), {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}):
+            done = self.just('coverage-check', env=other)
+            self.assertEqual(done.returncode, 0, self.out(done))
+            self.assertIn('so the tests run now', done.stdout)
+        self.assertEqual(self.just('test', env=env).returncode, 0)
+        self.add_extra()
+        done = self.just('coverage-check', env=env)
+        self.assertIn('so the tests run now', done.stdout)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('src/extra.rs', done.stdout)
+        self.assertEqual(self.just('test', 'add_sums', env=env).returncode, 0)
+        self.assertIn('so the tests run now', self.just('coverage-check', env=env).stdout)
+
+    def test_one_run_id_of_the_root_justfile_runs_the_tests_once(self):
+        bin_dir = self.dir / 'stand-in-bin'
+        bin_dir.mkdir()
+        log = self.base / 'once.lines'
+        log.unlink(missing_ok=True)
+        (bin_dir / 'jlog').write_text(f'#!/bin/sh\nprintf "%s\\n" "$3" >> "{log}"\nexec "$@"\n')
+        (bin_dir / 'jlog').chmod(0o755)
+        module = self.dir / '.agents/just/rust.just'
+        module.write_text(module.read_text().replace('set positional-arguments',
+                                                     'set positional-arguments\nset shell := ["jlog", "sh", "-cu"]'))
+        justfile = self.dir / 'Justfile'
+        # A root recipe with the two steps, as just check will have them. The index runs each in an inner just call.
+        justfile.write_text('export JLOG_RUN := env("JLOG_RUN", uuid())\n' + justfile.read_text()
+                            + '\ngates: test coverage-check\n')
+        env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
+        env['PATH'] = f'{bin_dir}:{env["PATH"]}'
+        done = self.just('gates', env=env)
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('so they do not run again', done.stdout)
+        runs = [line for line in log.read_text().splitlines() if line.startswith('cargo llvm-cov test')]
+        self.assertEqual(len(runs), 1, runs)
 
     def test_a_project_in_a_subfolder_reads_its_own_lists(self):
         mono = self.base / 'mono'
