@@ -13,13 +13,33 @@ the project, which can be a subfolder of the git repository.
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 
 DIFF_COVER = 'diff-cover==11.0.1'
+# The exit codes of test-paths, the same for each profile: the tests passed, a test failed or did not build,
+# the runner itself failed, and no test ran, as pytest gives when it collects none.
+PASSED, FAILED, RUNNER, NO_TEST = 0, 1, 2, 5
+# What cargo prints when a test fails or a test does not build.
+BROKE = re.compile(r'^error: (?:test failed|could not compile|failed to run custom build command)', re.M)
+# What cargo prints when no test target matches the name or the pattern.
+NO_TARGET = re.compile(r'^error: no test target matches pattern', re.M)
+# The line of cargo for each test binary that it starts, in its exact form, so a line that a test leaks, such as
+# that of a cargo run inside a test, does not match. A binary with harness = false prints no test result.
+RUNNING = re.compile(r'^     Running (?:unittests )?[^`\s].* \(\S*deps[/\\]\S+\)$', re.M)
+# The line of libtest that announces how many tests a binary will run.
+ANNOUNCED = re.compile(r'^running (\d+) tests?$', re.M)
+# The escape codes of terminal colors, which a test may still print.
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+# The seconds with no new line, once the command ends, after which the copy of its output stops.
+LINGER = 2
+# The summary line of each test binary: the numbers of the passed and of the failed tests.
+TEST_RESULT = re.compile(r'^test result: \w+\. (\d+) passed; (\d+) failed;', re.M)
 GENERATED = '.agents/generated.txt'
 COVERAGE_EXCLUDE = '.agents/coverage-exclude.txt'
 REPORT = Path('target/llvm-cov/lcov.info')
@@ -333,15 +353,31 @@ def package_of(path):
     raise SystemExit(f'test-paths: no Cargo package holds {path}')
 
 
+def target_names():
+    """Map the real path of the file of each test target of the workspace to the name of the target.
+
+    A [[test]] in Cargo.toml can give a target a name that is not the name of its file, so the names come from
+    cargo metadata.
+    """
+    done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        raise SystemExit('test-paths: cargo metadata failed')
+    return {os.path.realpath(target['src_path']): target['name']
+            for package in json.loads(done.stdout)['packages'] for target in package['targets']
+            if 'test' in target['kind']}
+
+
 def test_commands(paths):
     """The cargo test commands for PATHS, one for each package, in the order of the paths, and the skipped paths.
 
-    Only a file in the folder tests of a package counts. A file tests/NAME.rs runs as the test target NAME. Any
+    Only a file in the folder tests of a package counts. A file tests/NAME.rs runs as its test target, which
+    cargo metadata names, and a file that is no test target, as with autotests = false, is skipped. Any
     other file there, for example tests/common/mod.rs, runs every test target of that folder, with --test '*'. A
     unit test lives in the file of its code, such as src/lib.rs. A copy of that file in the parent commit brings
     the new code too, so the test proves nothing there, and test-paths skips the file.
     """
-    targets, skipped = {}, []
+    targets, skipped, names = {}, [], None
     for path in paths:
         if not Path(path).is_file():
             raise SystemExit(f'test-paths: {path} is not a file')
@@ -350,11 +386,16 @@ def test_commands(paths):
         if len(parts) < 2 or parts[0] != 'tests':
             skipped.append(path)
             continue
-        chosen = targets.setdefault(name, [])
         if len(parts) == 2 and parts[1].endswith('.rs'):
-            chosen.append(['--test', parts[1][:-3]])
+            if names is None:
+                names = target_names()
+            target = names.get(os.path.realpath(path))
+            if target is None:
+                print(f'test-paths: skips {path}, which is no test target of its package', flush=True)
+                continue
+            targets.setdefault(name, []).append(['--test', target])
         else:
-            chosen.append(['--test', '*'])
+            targets.setdefault(name, []).append(['--test', '*'])
     commands = []
     for name, chosen in targets.items():
         every = ['--test', '*'] in chosen
@@ -364,22 +405,90 @@ def test_commands(paths):
 
 
 def test_paths(paths):
-    """Run the tests of PATHS without coverage, and return the exit code of the first command that fails."""
-    commands, skipped = test_commands(paths)
+    """Run the tests of PATHS without coverage, and return the exit code that the spec gives every profile.
+
+    PASSED (0) when the tests ran and passed, FAILED (1) when a test failed or did not build, NO_TEST (5) when no
+    test ran, and RUNNER (2) when cargo itself failed, for example on a stale Cargo.lock or a path it cannot run.
+    """
+    try:
+        commands, skipped = test_commands(paths)
+    except SystemExit as error:
+        print(error, file=sys.stderr, flush=True)
+        return RUNNER
     for path in skipped:
         print(f'test-paths: skips {path}, which is not in the folder tests of a package', flush=True)
     if not commands:
         print('test-paths: no file in the folder tests of a package, so no test ran', flush=True)
+        return NO_TEST
+    ran = 0
     for command in commands:
         print(shlex.join(command), flush=True)
-        code = subprocess.run(command).returncode
+        code, out = run_streamed(command)
+        if code and NO_TARGET.search(out) and not RUNNING.search(out) and not BROKE.search(out):
+            print('test-paths: no test target in the folder tests, so no test ran', flush=True)
+            continue
         if code:
-            return code
-    return 0
+            return outcome(code, out)
+        for binary in RUNNING.split(out)[1:]:
+            results = TEST_RESULT.findall(binary)
+            if results:
+                ran += sum(int(a) + int(b) for a, b in results)
+            elif any(int(n) for n in ANNOUNCED.findall(binary)):
+                print('test-paths: a test binary stopped before it gave its result', flush=True)
+                return FAILED
+            else:
+                ran += 1
+    if not ran:
+        print('test-paths: the test targets hold no test that is not ignored, so no test ran', flush=True)
+        return NO_TEST
+    return PASSED
+
+
+def outcome(code, out):
+    """The exit code of test-paths for a cargo command that exited with CODE, not 0, and printed OUT.
+
+    cargo exits with 101 both when a test fails or does not build and when it fails itself, and it passes on the
+    code of a test binary that exits by itself. Its output tells them apart: a failed test or a failed build is
+    FAILED, and anything else is RUNNER.
+    """
+    if BROKE.search(out):
+        return FAILED
+    print(f'test-paths: cargo failed with {code} before a test could run', flush=True)
+    return RUNNER
+
+
+def run_streamed(command):
+    """Run COMMAND with its stderr in its stdout, copy each line out as it comes, and return the code and the text.
+
+    The output of cargo is plain, with no colors, no quiet and no verbose lines, so the patterns match it. Once
+    COMMAND ends, the copy goes on while lines still come, so a slow reader of stdout loses none. A process that
+    COMMAND left running and that holds the pipe open, but prints nothing, does not keep this one waiting.
+    """
+    env = dict(os.environ, CARGO_TERM_COLOR='never', CARGO_TERM_QUIET='false', CARGO_TERM_VERBOSE='false')
+    lines = []
+
+    def copy(pipe):
+        """Copy each line of PIPE to stdout and keep its text."""
+        for line in pipe:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+            lines.append(line.decode('utf-8', 'replace'))
+
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    reader = threading.Thread(target=copy, args=(child.stdout,), daemon=True)
+    reader.start()
+    code = child.wait()
+    seen = -1
+    while reader.is_alive() and len(lines) != seen:
+        seen = len(lines)
+        reader.join(LINGER)
+    if not reader.is_alive():
+        child.stdout.close()
+    return code, ANSI.sub('', ''.join(lines))
 
 
 def main(argv):
-    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, or test-paths PATH...: its exit code."""
+    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, or test-paths [PATH...]: its exit code."""
     if len(argv) == 2 and argv[0] == 'coverage':
         return coverage(argv[1])
     if argv == ['docs']:
@@ -390,9 +499,9 @@ def main(argv):
         return begin(argv[1:])
     if argv == ['stamp']:
         return stamp()
-    if len(argv) >= 2 and argv[0] == 'test-paths':
+    if argv[:1] == ['test-paths']:
         return test_paths(argv[1:])
-    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths PATH...', file=sys.stderr)
+    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths [PATH...]', file=sys.stderr)
     return 2
 
 

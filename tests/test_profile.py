@@ -21,6 +21,7 @@ class Profile(unittest.TestCase):
         self.assertEqual(PROFILE['detect'], ['Cargo.toml'])
         self.assertEqual(PROFILE['manifest'], 'Cargo.toml')
         self.assertEqual(PROFILE['code'], ['**/*.rs'])
+        self.assertEqual(PROFILE['tests'], ['tests/**'])
         # Anchored, so that a module folder such as src/target/ stays in git.
         self.assertIn('/target/', PROFILE['base']['lines']['.gitignore'])
         self.assertIn('/target/', PROFILE['base']['lines']['.worktreedisposable'])

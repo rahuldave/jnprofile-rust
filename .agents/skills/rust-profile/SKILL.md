@@ -58,10 +58,14 @@ does not.
   `-W` and `--cap-lints warn`, and reads the messages of clippy, so a
   generated file can be left out. A file that git ignores, such as code that
   `build.rs` writes into `target/`, counts as generated.
-- **`test-paths PATH...`** runs the tests of some files with `cargo test`.
+- **`test-paths [PATH...]`** runs the tests of some files with `cargo test`.
   A file `tests/NAME.rs` runs the test target `NAME`. Any other file in the
   folder `tests` runs every test target of that folder. It skips a file of
   code, such as `src/lib.rs`, because its unit tests live with the new code.
+  It exits with 0 when the tests pass, and with 1 when a test fails or does
+  not build. It exits with 5 when no test ran, such as with no path or when
+  the test targets hold only ignored tests. It exits with 2 when cargo
+  itself fails, such as on a stale `Cargo.lock`.
 
 ## Lines that no test can run
 

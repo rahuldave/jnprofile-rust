@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +17,11 @@ sys.path.insert(0, str(REPO / '.agents/just/rust'))
 import steps  # noqa: E402
 
 CARGO_TEST = ['cargo', 'test', '--locked', '--all-features', '--package']
+
+
+# The summary line of a test binary with one passed test.
+PASSED = ('     Running tests/api.rs (target/debug/deps/api-1)\nrunning 1 test\n'
+          'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n')
 
 
 class Lcov(unittest.TestCase):
@@ -75,6 +81,10 @@ class Repository(unittest.TestCase):
         old = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, old)
+        names = mock.patch.object(steps, 'target_names', side_effect=lambda: {
+            os.path.realpath(path): path.stem for path in self.root.glob('**/tests/*.rs')})
+        names.start()
+        self.addCleanup(names.stop)
 
     def git(self, *args):
         subprocess.run(['git', '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', *args], cwd=self.root,
@@ -293,13 +303,142 @@ class Repository(unittest.TestCase):
         self.files('src/lib.rs', 'benches/b.rs', 'tests/common/mod.rs')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(steps.test_paths(['src/lib.rs', 'benches/b.rs']), 0)
+            self.assertEqual(steps.test_paths(['src/lib.rs', 'benches/b.rs']), 5)
         self.assertIn('skips benches/b.rs, which is not in the folder tests of a package', out.getvalue())
         self.assertIn('no file in the folder tests of a package, so no test ran', out.getvalue())
-        with mock.patch.object(steps.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+        with mock.patch.object(steps, 'run_streamed', return_value=(0, PASSED)), \
                 contextlib.redirect_stdout(out):
             steps.test_paths(['tests/common/mod.rs'])
         self.assertIn("--package app --test '*'", out.getvalue())
+
+    def test_test_paths_gives_1_for_a_failed_test_or_build_and_2_when_cargo_itself_fails(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/api.rs')
+        fail = PASSED.replace('ok. 1 passed; 0', 'FAILED. 0 passed; 1') + 'error: test failed, to rerun pass `--test api`\n'
+        cases = (
+            (0, PASSED, 0),
+            (101, fail, 1),
+            (101, 'error: could not compile `app` (test "api") due to 1 previous error\n', 1),
+            (101, 'error: failed to run custom build command for `app v0.1.0`\n', 1),
+            (101, 'error: the lock file Cargo.lock needs to be updated but --locked was passed\n', 2),
+            (101, 'error: no test target named `api` in `app` package\n', 2),
+            # cargo passes on the code of a test binary that exits by itself, so the output decides.
+            (5, fail, 1), (1, fail, 1), (-9, fail, 1), (256, fail, 1),
+            (5, '', 2), (1, '', 2), (-9, '', 2), (256, '', 2),
+            # A binary that announced its tests and stopped with no result, as on exit(0) in a test.
+            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\n', 1),
+        )
+        for got, out, want in cases:
+            with self.subTest(got=got, out=out), \
+                    mock.patch.object(steps, 'run_streamed', return_value=(got, out)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.test_paths(['tests/api.rs']), want)
+
+    def test_test_paths_with_no_path_runs_no_test_and_gives_5(self):
+        with mock.patch.object(steps, 'run_streamed') as run, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.main(['test-paths']), 5)
+        run.assert_not_called()
+
+    def test_test_paths_runs_a_test_file_by_the_name_of_its_target_and_skips_a_file_that_is_no_target(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/bar.rs', 'tests/loose.rs')
+        names = {os.path.realpath('tests/bar.rs'): 'foo'}
+        out = io.StringIO()
+        with mock.patch.object(steps, 'target_names', return_value=names), contextlib.redirect_stdout(out):
+            commands, skipped = steps.test_commands(['tests/bar.rs', 'tests/loose.rs'])
+        self.assertEqual(commands, [['cargo', 'test', '--locked', '--all-features', '--package', 'app', '--test', 'foo']])
+        self.assertEqual(skipped, [])
+        self.assertIn('skips tests/loose.rs, which is no test target of its package', out.getvalue())
+        with mock.patch.object(steps, 'target_names', return_value={}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.test_paths(['tests/loose.rs']), 5)
+
+    def test_test_paths_ignores_running_lines_that_a_test_leaks(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/api.rs')
+        head, result = PASSED.split('running 1 test\n')
+        for leak in ('     Running `target/inner/debug/leak6`\n', '     Running x\n', 'Running tests/a.rs (x)\n'):
+            out = head + 'running 2 tests\n' + leak + result.replace('1 passed', '2 passed')
+            with self.subTest(leak=leak), mock.patch.object(steps, 'run_streamed', return_value=(0, out)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.test_paths(['tests/api.rs']), 0)
+        self.assertRegex('     Running unittests src/lib.rs (target/debug/deps/app-1)', steps.RUNNING)
+        self.assertRegex('     Running tests\\api.rs (target\\debug\\deps\\api-1.exe)', steps.RUNNING)
+
+    def test_test_paths_gives_2_for_a_path_that_it_cannot_run(self):
+        (self.root / 'Cargo.toml').write_text('[workspace]\n')
+        self.files('tests/api.rs')
+        for path in ('tests/nope.rs', 'tests/api.rs'):
+            with self.subTest(path=path), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(steps.test_paths([path]), 2)
+            self.assertIn('test-paths:', err.getvalue())
+
+    def test_test_paths_gives_no_test_when_cargo_runs_zero_tests_or_finds_no_target(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/empty.rs', 'tests/common/mod.rs')
+        zero = 'test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out\n'
+        missing = 'error: no test target matches pattern `*`\n'
+        running = '     Running tests/empty.rs (target/debug/deps/empty-1)\n'
+        failed = PASSED.replace('ok. 1 passed; 0', 'FAILED. 0 passed; 1')
+        cases = (
+            ((0, running + zero), ['tests/empty.rs'], 5),
+            ((101, missing), ['tests/common/mod.rs'], 5),
+            ((101, running + failed + 'error: test failed, to rerun pass `--test x`\n' + missing),
+             ['tests/common/mod.rs'], 1),
+            ((0, zero + PASSED), ['tests/empty.rs'], 0),
+            # A target with harness = false prints no test result, but it ran.
+            ((0, running), ['tests/empty.rs'], 0),
+            # A compile error that quotes the text, or a warning of a build script, is not cargo's own error line.
+            ((101, '   |     let x: u8 = "' + missing.strip() + '";\nerror: could not compile `app`\n'),
+             ['tests/common/mod.rs'], 1),
+            ((101, 'warning: app@0.1.0: ' + missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 1),
+            ((101, missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 1),
+        )
+        for done, paths, want in cases:
+            out = io.StringIO()
+            with self.subTest(paths=paths, want=want), \
+                    mock.patch.object(steps, 'run_streamed', return_value=done), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(steps.test_paths(paths), want)
+                if want == 5:
+                    self.assertIn('so no test ran', out.getvalue())
+
+    def test_run_streamed_keeps_the_order_and_survives_bytes_that_are_not_utf_8(self):
+        script = 'import sys; print("one", flush=True); sys.stderr.write("two\\n"); sys.stderr.flush(); ' \
+            'sys.stdout.buffer.write(b"\\xff three\\n"); sys.exit(3)'
+        raw = io.BytesIO()
+        wrapper = io.TextIOWrapper(raw)
+        self.addCleanup(wrapper.detach)
+        with mock.patch.object(steps.sys, 'stdout', wrapper):
+            code, out = steps.run_streamed([sys.executable, '-c', script])
+        self.assertEqual(code, 3)
+        self.assertEqual(out, 'one\ntwo\n\ufffd three\n')
+        self.assertEqual(raw.getvalue(), b'one\ntwo\n\xff three\n')
+
+    def test_run_streamed_does_not_wait_for_a_process_that_the_command_left_running(self):
+        script = 'import subprocess, sys; subprocess.Popen(["sleep", "30"]); print("\\x1b[1mdone\\x1b[0m")'
+        start = time.monotonic()
+        with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())):
+            code, out = steps.run_streamed([sys.executable, '-c', script])
+        self.assertEqual((code, out), (0, 'done\n'))
+        self.assertLess(time.monotonic() - start, 10)
+
+    def test_run_streamed_copies_all_the_output_to_a_slow_reader(self):
+        class Slow(io.BytesIO):
+            """A stdout that takes a while for each line."""
+
+            def write(self, data):
+                """Wait, then keep DATA."""
+                time.sleep(0.01)
+                return super().write(data)
+
+        slow = Slow()
+        script = 'for n in range(100): print(n)\nprint("BOOM")'
+        with mock.patch.object(steps, 'LINGER', 0.2), \
+                mock.patch.object(steps.sys, 'stdout', mock.Mock(buffer=slow)):
+            code, out = steps.run_streamed([sys.executable, '-c', script])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.endswith('99\nBOOM\n'))
+        self.assertTrue(slow.getvalue().endswith(b'99\nBOOM\n'))
 
     def test_main_names_the_usage_for_unknown_commands(self):
         err = io.StringIO()

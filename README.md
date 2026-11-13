@@ -42,7 +42,7 @@ with `rustup component add llvm-tools-preview`.
 
 | Path | What it holds |
 |---|---|
-| `profile.json` | The profile: how to find a Rust project, its tools, its lines for `.gitignore` and `.worktreedisposable`, and the `@code` globs. |
+| `profile.json` | The profile: how to find a Rust project, its tools, its lines for `.gitignore` and `.worktreedisposable`, the `@code` globs, and the `tests` globs. |
 | `.agents/just/rust/` | One recipe file for each tool, and `steps.py`, the helper script of three steps. The installer copies the folder into the project. |
 | `.agents/targets/rust/` | The Rust rules for the agentic targets `review`, `test-review`, `docs` and `prose`. |
 | `.agents/skills/rust-profile/` | The skill that tells an agent how to use the recipes. |
