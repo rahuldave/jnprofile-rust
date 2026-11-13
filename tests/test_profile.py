@@ -88,12 +88,13 @@ class Lint(unittest.TestCase):
         self.assertEqual([p for path in sorted((REPO / '.agents/just/rust').glob('*.just'))
                           for p in lint_just.problems(path)], [])
 
-    def test_the_lint_finds_a_shebang_a_dash_line_no_cd_a_working_directory_attribute_and_jlog_run(self):
+    def test_the_lint_finds_a_shebang_a_dash_line_no_cd_a_working_directory_attribute_jlog_run_and_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'bad.just'
             path.write_text('a:\n    #!/usr/bin/env sh\n    true\n\nb:\n    -false\n\n[no-cd]\nc:\n    true\n\n'
                             "set working-directory := '..'\n\n[working-directory: 'x']\nw:\n    true\n\n[script]\nd:\n    true\n\n"
-                            'e:\n    @-false\n\nexport JLOG_RUN := env("JLOG_RUN", uuid())\nJLOG_RUN := uuid()\n')
+                            'e:\n    @-false\n\nexport JLOG_RUN := env("JLOG_RUN", uuid())\nJLOG_RUN := uuid()\n'
+                            'set shell := ["sh", "-cu"]\nset windows-shell := ["cmd"]\nset windows-powershell\n')
             found = lint_just.problems(path)
         self.assertEqual([line.split(': ', 1)[1] for line in found], [
             'a shebang line', 'a line with the prefix -, which ignores a failure', 'the [no-cd] attribute',
@@ -101,7 +102,9 @@ class Lint(unittest.TestCase):
             'the [working-directory] attribute', 'the [script] attribute',
             'a line with the prefix -, which ignores a failure',
             'an assignment of JLOG_RUN, which only the root Justfile may have',
-            'an assignment of JLOG_RUN, which only the root Justfile may have'])
+            'an assignment of JLOG_RUN, which only the root Justfile may have',
+            'the setting shell, which only the installer may set', 'the setting shell, which only the installer may set',
+            'the setting shell, which only the installer may set'])
 
 
 if __name__ == '__main__':

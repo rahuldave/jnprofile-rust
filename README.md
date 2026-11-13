@@ -32,7 +32,10 @@ just uninstall docstring
 just install docstring
 ```
 
-The machine needs `cargo`, `cargo-llvm-cov`, `just` and `uv`. Install
+The machine needs `cargo`, `cargo-llvm-cov`, `just` and `uv`. `just install`
+also needs jlog v0.1.0, because jnterfaces runs each step through it. The
+[install table](docs/index.md#install) gives the line
+for each program. Install
 `cargo-llvm-cov` with `cargo install cargo-llvm-cov`, and its rustup component
 with `rustup component add llvm-tools-preview`.
 

@@ -24,6 +24,7 @@ The machine needs these programs:
 | `cargo-llvm-cov` | The coverage of `test` and `coverage-check` | `cargo install cargo-llvm-cov`, and `rustup component add llvm-tools-preview` |
 | `just` | Every recipe | `cargo install just` |
 | `uv` | `diff-cover` and the helper script of the steps | https://docs.astral.sh/uv/ |
+| `jlog` v0.1.0 | `just install` of jnterfaces, which runs each step through it | Clone https://github.com/rahuldave/jlog, run `git checkout v0.1.0`, then `just install` there |
 
 ## The steps
 

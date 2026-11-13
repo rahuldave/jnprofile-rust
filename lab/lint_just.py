@@ -4,7 +4,8 @@ A recipe with a shebang line or the [script] attribute does not run through the 
 jlog. A line with the prefix - ignores a failure. [no-cd] and a [working-directory] attribute on a recipe change the
 folder in which jlog looks for the log folder. The spec of the commit gates forbids all of them in a step. The
 setting set working-directory is allowed only in the module that the installer writes, not in the recipe files of
-the profile. A module must not assign JLOG_RUN, because it would make a second run ID.
+the profile. A module must not assign JLOG_RUN, because it would make a second run ID, and must not set shell,
+because the installer sets it to jlog.
 
     python lab/lint_just.py .agents/just/rust
 """
@@ -22,6 +23,7 @@ RULES = [
     (re.compile(r'^\s*\[[^\]]*\bno-cd\b'), 'the [no-cd] attribute'),
     (re.compile(r'^\s*\[[^\]]*\bworking-directory\b'), 'the [working-directory] attribute'),
     (re.compile(r'^\s*(export\s+)?JLOG_RUN\s*:='), 'an assignment of JLOG_RUN, which only the root Justfile may have'),
+    (re.compile(r'^\s*set\s+(windows-shell|windows-powershell|shell)\b'), 'the setting shell, which only the installer may set'),
     (re.compile(r'^\s*set\s+working-directory'), 'the setting working-directory, which only the module of the installer may have'),
 ]
 
