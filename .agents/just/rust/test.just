@@ -19,5 +19,5 @@ coverage-check:
     {{rust_py}} {{rust_steps}} coverage target/llvm-cov/lcov.info
 
 # Run the tests of some files in the folder tests, without coverage: just test-paths tests/parse.rs
-test-paths +paths:
+test-paths *paths:
     {{rust_py}} {{rust_steps}} test-paths "$@"

@@ -20,7 +20,8 @@ CARGO_TEST = ['cargo', 'test', '--locked', '--all-features', '--package']
 
 
 # The summary line of a test binary with one passed test.
-PASSED = 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n'
+PASSED = ('     Running tests/api.rs (target/debug/deps/api-1)\nrunning 1 test\n'
+          'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n')
 
 
 class Lcov(unittest.TestCase):
@@ -80,6 +81,10 @@ class Repository(unittest.TestCase):
         old = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, old)
+        names = mock.patch.object(steps, 'target_names', side_effect=lambda: {
+            os.path.realpath(path): path.stem for path in self.root.glob('**/tests/*.rs')})
+        names.start()
+        self.addCleanup(names.stop)
 
     def git(self, *args):
         subprocess.run(['git', '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', *args], cwd=self.root,
@@ -306,14 +311,66 @@ class Repository(unittest.TestCase):
             steps.test_paths(['tests/common/mod.rs'])
         self.assertIn("--package app --test '*'", out.getvalue())
 
-    def test_test_paths_never_gives_a_failure_the_code_of_a_pass_or_of_no_test(self):
+    def test_test_paths_gives_1_for_a_failed_test_or_build_and_2_when_cargo_itself_fails(self):
         (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
         self.files('tests/api.rs')
-        for got, want in ((0, 0), (101, 101), (5, 1), (-9, 1), (256, 1)):
-            with self.subTest(got=got), \
-                    mock.patch.object(steps, 'run_streamed', return_value=(got, PASSED)), \
+        fail = PASSED.replace('ok. 1 passed; 0', 'FAILED. 0 passed; 1') + 'error: test failed, to rerun pass `--test api`\n'
+        cases = (
+            (0, PASSED, 0),
+            (101, fail, 1),
+            (101, 'error: could not compile `app` (test "api") due to 1 previous error\n', 1),
+            (101, 'error: failed to run custom build command for `app v0.1.0`\n', 1),
+            (101, 'error: the lock file Cargo.lock needs to be updated but --locked was passed\n', 2),
+            (101, 'error: no test target named `api` in `app` package\n', 2),
+            # cargo passes on the code of a test binary that exits by itself, so the output decides.
+            (5, fail, 1), (1, fail, 1), (-9, fail, 1), (256, fail, 1),
+            (5, '', 2), (1, '', 2), (-9, '', 2), (256, '', 2),
+            # A binary that announced its tests and stopped with no result, as on exit(0) in a test.
+            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\n', 1),
+        )
+        for got, out, want in cases:
+            with self.subTest(got=got, out=out), \
+                    mock.patch.object(steps, 'run_streamed', return_value=(got, out)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(steps.test_paths(['tests/api.rs']), want)
+
+    def test_test_paths_with_no_path_runs_no_test_and_gives_5(self):
+        with mock.patch.object(steps, 'run_streamed') as run, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.main(['test-paths']), 5)
+        run.assert_not_called()
+
+    def test_test_paths_runs_a_test_file_by_the_name_of_its_target_and_skips_a_file_that_is_no_target(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/bar.rs', 'tests/loose.rs')
+        names = {os.path.realpath('tests/bar.rs'): 'foo'}
+        out = io.StringIO()
+        with mock.patch.object(steps, 'target_names', return_value=names), contextlib.redirect_stdout(out):
+            commands, skipped = steps.test_commands(['tests/bar.rs', 'tests/loose.rs'])
+        self.assertEqual(commands, [['cargo', 'test', '--locked', '--all-features', '--package', 'app', '--test', 'foo']])
+        self.assertEqual(skipped, [])
+        self.assertIn('skips tests/loose.rs, which is no test target of its package', out.getvalue())
+        with mock.patch.object(steps, 'target_names', return_value={}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.test_paths(['tests/loose.rs']), 5)
+
+    def test_test_paths_ignores_running_lines_that_a_test_leaks(self):
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/api.rs')
+        head, result = PASSED.split('running 1 test\n')
+        for leak in ('     Running `target/inner/debug/leak6`\n', '     Running x\n', 'Running tests/a.rs (x)\n'):
+            out = head + 'running 2 tests\n' + leak + result.replace('1 passed', '2 passed')
+            with self.subTest(leak=leak), mock.patch.object(steps, 'run_streamed', return_value=(0, out)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.test_paths(['tests/api.rs']), 0)
+        self.assertRegex('     Running unittests src/lib.rs (target/debug/deps/app-1)', steps.RUNNING)
+        self.assertRegex('     Running tests\\api.rs (target\\debug\\deps\\api-1.exe)', steps.RUNNING)
+
+    def test_test_paths_gives_2_for_a_path_that_it_cannot_run(self):
+        (self.root / 'Cargo.toml').write_text('[workspace]\n')
+        self.files('tests/api.rs')
+        for path in ('tests/nope.rs', 'tests/api.rs'):
+            with self.subTest(path=path), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(steps.test_paths([path]), 2)
+            self.assertIn('test-paths:', err.getvalue())
 
     def test_test_paths_gives_no_test_when_cargo_runs_zero_tests_or_finds_no_target(self):
         (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
@@ -325,15 +382,16 @@ class Repository(unittest.TestCase):
         cases = (
             ((0, running + zero), ['tests/empty.rs'], 5),
             ((101, missing), ['tests/common/mod.rs'], 5),
-            ((101, running + failed + missing), ['tests/common/mod.rs'], 101),
+            ((101, running + failed + 'error: test failed, to rerun pass `--test x`\n' + missing),
+             ['tests/common/mod.rs'], 1),
             ((0, zero + PASSED), ['tests/empty.rs'], 0),
             # A target with harness = false prints no test result, but it ran.
             ((0, running), ['tests/empty.rs'], 0),
             # A compile error that quotes the text, or a warning of a build script, is not cargo's own error line.
             ((101, '   |     let x: u8 = "' + missing.strip() + '";\nerror: could not compile `app`\n'),
-             ['tests/common/mod.rs'], 101),
-            ((101, 'warning: app@0.1.0: ' + missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 101),
-            ((101, missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 101),
+             ['tests/common/mod.rs'], 1),
+            ((101, 'warning: app@0.1.0: ' + missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 1),
+            ((101, missing + 'error: could not compile `app`\n'), ['tests/common/mod.rs'], 1),
         )
         for done, paths, want in cases:
             out = io.StringIO()

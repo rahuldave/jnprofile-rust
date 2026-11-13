@@ -32,6 +32,9 @@
   "code": [
     "**/*.rs"
   ],
+  "tests": [
+    "tests/**"
+  ],
   "tools": {
     "lint": {
       "packages": [],

@@ -37,7 +37,7 @@ The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.wo
 |---|---|
 | `just test` | Runs the tests with `cargo llvm-cov test`, and writes the coverage to `target/llvm-cov/lcov.info`. Extra arguments go to cargo llvm-cov test, so `just test parse` runs the tests whose names hold `parse` |
 | `just coverage-check` | Fails on each changed line of code that no test runs. It runs the tests first, unless `test` of the same run wrote the report |
-| `just test-paths PATH...` | Runs the tests of some files in the folder `tests`, with `cargo test` and without coverage |
+| `just test-paths [PATH...]` | Runs the tests of some files in the folder `tests`, with `cargo test` and without coverage |
 
 `cargo llvm-cov` writes the coverage as an LCOV file, a text format that lists how often each line ran. `diff-cover` is a Python program that compares such a file with the diff of git.
 
@@ -61,15 +61,20 @@ A full run of `just test`, with no arguments, takes the worktree tree before the
 
 `test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file in the folder `tests`, such as `tests/common/mod.rs`, runs every test target of that folder. A unit test lives in the file of its code, such as `src/lib.rs`. A copy of that file in the parent commit brings the new code too, so `test-paths` skips the file and says so.
 
-The exit code of `test-paths` tells `test-parent` what happened:
+The exit code of `test-paths` tells `test-parent` what happened. Each profile gives the same four codes:
 
 - **0** means the tests ran and passed.
-- **5** means no test ran. The change may add only unit tests, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. pytest gives the same code when it collects no test.
-- **Any other code** means a test failed or cargo could not build the tests.
+- **1** means a test failed or did not build. A new test of new code often does not build on the parent, and that is a failure of the test.
+- **5** means no test ran. The change may add only unit tests, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. With no path, `test-paths` runs no test and exits with 5. pytest gives the same code when it collects no test.
+- **2** means cargo itself failed, for example on a stale `Cargo.lock` or on a path that it cannot run.
+
+cargo exits with 101 both when a test fails or does not build and when it fails itself. So `test-paths` reads the error lines of cargo to tell them apart.
 
 `test-paths` reads the output of cargo to count the tests that ran. So it runs cargo with no colors and with neither quiet nor verbose output, whatever the settings of `CARGO_TERM_COLOR`, `CARGO_TERM_QUIET` and `CARGO_TERM_VERBOSE`. A target with `harness = false` prints no count, so its run counts as a test that ran.
 
-A test target needs the name of its file. If `Cargo.toml` names a `[[test]]` other than its file, or turns off `autotests`, cargo finds no target of that name. Then `test-paths` fails with the code of cargo.
+`test-paths` reads the name of each test target from `cargo metadata`. So a `[[test]]` with a name other than its file still runs. A file in `tests` that is no test target, as with `autotests = false`, does not run, and `test-paths` says so. A test binary that names its tests and then stops with no result, as on `std::process::exit(0)` in a test, counts as a failure.
+
+The key `tests` of `profile.json` names `tests/**`, the folder `tests` at the top of the project. A glob cannot name only the folder `tests` of each package of a workspace, because `**/tests/**` also takes a module such as `src/x/tests/mod.rs`, whose new code would reach the parent. So the tests of a member package are not copied to the parent, and `test-review` judges them from the diff.
 
 ## docstring
 
