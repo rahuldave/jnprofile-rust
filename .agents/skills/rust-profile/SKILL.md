@@ -12,6 +12,11 @@ this profile add no crate to `Cargo.toml`. They use `cargo` with the rustup
 components `clippy` and `rustfmt`, `cargo-llvm-cov` with the rustup component
 `llvm-tools-preview`, and `uv`.
 
+The installer installs each program that a
+tool needs with `rustup component add` or `cargo +stable install --locked`, as the key
+`programs` of `profile.json` says. Only Rust itself must come from rustup
+first.
+
 ## The tools and their recipes
 
 | Tool | Recipes | What the steps check |
@@ -21,8 +26,9 @@ components `clippy` and `rustfmt`, `cargo-llvm-cov` with the rustup component
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
 | `test` | `test`, `coverage-check`, `test-paths` | the tests, and that the tests run each changed line |
 | `docstring` | `docstring-check` | a doc comment on each item, public or private |
+| `toml`, not a default tool | `toml-fmt`, `toml-check` | the format of the TOML files with taplo, and the order of the tables of `Cargo.toml` with cargo-sort |
 
-All four tools are the default tools. The base adds `/target/` and
+The first four tools are the default tools. `toml-check` is not a step of the commit gates, so `just verify` runs it and `just check` does not. The base adds `/target/` and
 `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. Every
 report of a step goes to `target/`, so no step leaves a file that git sees.
 

@@ -35,6 +35,69 @@
   "tests": [
     "tests/**"
   ],
+  "programs": [
+    {
+      "name": "rustup",
+      "check": "rustup --version",
+      "description": "Install Rust with rustup: https://rustup.rs/"
+    },
+    {
+      "name": "toolchain",
+      "check": "rustup show active-toolchain",
+      "install": "rustup toolchain install",
+      "description": "The toolchain that the rust-toolchain.toml or rust-toolchain file of the project pins, else the default toolchain of rustup. It brings cargo and rustc."
+    },
+    {
+      "name": "rustfmt",
+      "check": "cargo fmt --version",
+      "install": "rustup component add rustfmt",
+      "description": "Formats the code, for fmt and fmt-check."
+    },
+    {
+      "name": "clippy",
+      "check": "cargo clippy --version",
+      "install": "rustup component add clippy",
+      "description": "Lints the code, for lint and docstring-check."
+    },
+    {
+      "name": "llvm-tools",
+      "check": "rustup component list --installed",
+      "expect": "llvm-tools",
+      "install": "rustup component add llvm-tools-preview",
+      "description": "The LLVM tools that cargo-llvm-cov reads the coverage with."
+    },
+    {
+      "name": "stable",
+      "check": "rustup run stable cargo --version",
+      "install": "rustup toolchain install stable --profile minimal",
+      "install_in": "home",
+      "description": "The stable toolchain, which builds the programs that cargo install installs, whatever the project pins."
+    },
+    {
+      "name": "cargo-llvm-cov",
+      "check": "cargo llvm-cov --version",
+      "expect": "cargo-llvm-cov 0.9.",
+      "install": "cargo +stable install --locked cargo-llvm-cov@0.9.1",
+      "install_in": "home",
+      "description": "Writes the coverage of the tests, for test and coverage-check."
+    },
+    {
+      "name": "taplo",
+      "check": "taplo --version",
+      "expect": "taplo 0.10.",
+      "install": "cargo +stable install --locked taplo-cli@0.10.0",
+      "install_in": "home",
+      "description": "Formats the TOML files, for toml-fmt and toml-check."
+    },
+    {
+      "name": "cargo-sort",
+      "check": "cargo sort --version",
+      "expect": "cargo-sort 2.1.",
+      "install": "cargo +stable install --locked cargo-sort@2.1.4",
+      "install_in": "home",
+      "description": "Sorts the tables of Cargo.toml, for toml-fmt and toml-check."
+    }
+  ],
   "tools": {
     "lint": {
       "packages": [],
@@ -42,6 +105,10 @@
       "verify": [
         "fmt-check",
         "lint"
+      ],
+      "programs": [
+        "rustfmt",
+        "clippy"
       ]
     },
     "typecheck": {
@@ -49,7 +116,8 @@
       "recipes": "typecheck.just",
       "verify": [
         "typecheck"
-      ]
+      ],
+      "programs": []
     },
     "test": {
       "packages": [],
@@ -57,6 +125,11 @@
       "verify": [
         "test",
         "coverage-check"
+      ],
+      "programs": [
+        "llvm-tools",
+        "stable",
+        "cargo-llvm-cov"
       ]
     },
     "docstring": {
@@ -64,6 +137,21 @@
       "recipes": "docstring.just",
       "verify": [
         "docstring-check"
+      ],
+      "programs": [
+        "clippy"
+      ]
+    },
+    "toml": {
+      "packages": [],
+      "programs": [
+        "stable",
+        "taplo",
+        "cargo-sort"
+      ],
+      "recipes": "toml.just",
+      "verify": [
+        "toml-check"
       ]
     }
   },
@@ -84,6 +172,10 @@
         "# cargo build makes target/ again from the code and Cargo.lock.",
         "/target/"
       ]
-    }
+    },
+    "programs": [
+      "rustup",
+      "toolchain"
+    ]
   }
 }

@@ -16,12 +16,17 @@ just install --profile rust
 
 In a folder with no `Cargo.toml`, the command first runs `cargo init --vcs none`. It then installs the four tools `lint`, `typecheck`, `test` and `docstring`. If you do not choose other roles, it also turns on the default roles of the profile, `tasker` and `prose`. The section [The roles](https://rahuldave.github.io/jnterfaces/#roles) of the jnterfaces guide says what each role installs.
 
-The machine needs these programs:
+The machine needs Rust from rustup, and the programs that jnterfaces needs. The profile installs the rest with rustup and cargo. The key `programs` of `profile.json` names each program, how the installer checks it, and how it installs it.
+
+The installer checks the programs of each tool that it installs, in the project folder. It runs `cargo +stable install` in the home folder, so the stable toolchain builds the programs, whatever the project pins, and also when rustup has no default toolchain. The profile installs stable with the minimal profile when it is missing. The checks run in the project folder, so rustup reads the `rust-toolchain.toml` of the project, and a component goes to the toolchain that the project pins.
 
 | Program | Use | Install |
 |---|---|---|
-| `cargo` | Every step, with the rustup components `clippy` and `rustfmt` | https://rustup.rs/ |
-| `cargo-llvm-cov` | The coverage of `test` and `coverage-check` | `cargo install cargo-llvm-cov`, and `rustup component add llvm-tools-preview` |
+| `rustup` | Every step | https://rustup.rs/. The installer stops if it is missing. |
+| The toolchain, with `cargo` | Every step | The profile runs `rustup toolchain install` when the toolchain that `rust-toolchain.toml` or `rust-toolchain` pins is missing |
+| `rustfmt` and `clippy` | `fmt`, `fmt-check`, `lint` and `docstring-check` | The profile runs `rustup component add` |
+| `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1` |
+| `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4` |
 | `just` | Every recipe | `cargo install just` |
 | `uv` | `diff-cover` and the helper script of the steps | https://docs.astral.sh/uv/ |
 | `jlog` v0.1.0 | `just install` of jnterfaces, which runs each step through it | Clone https://github.com/rahuldave/jlog, run `git checkout v0.1.0`, then `just install` there |

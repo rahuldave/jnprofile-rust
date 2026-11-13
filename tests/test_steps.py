@@ -440,6 +440,28 @@ class Repository(unittest.TestCase):
         self.assertTrue(out.endswith('99\nBOOM\n'))
         self.assertTrue(slow.getvalue().endswith(b'99\nBOOM\n'))
 
+    def test_toml_fails_outside_git_and_ends_the_options_before_the_files(self):
+        real, calls = subprocess.run, []
+
+        def fake(command, *args, **kwargs):
+            """Run git for real, and record each other command as passed."""
+            if command[0] == 'git':
+                return real(command, *args, **kwargs)
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0)
+
+        self.files('Cargo.toml', '-dash.toml', 'sub/a.toml')
+        with mock.patch.object(steps.subprocess, 'run', side_effect=fake), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.toml(['--check']), 0)
+        self.assertEqual(calls[0][:5], ['cargo', 'sort', '--workspace', '--no-format', '--check'])
+        self.assertEqual(calls[1], ['taplo', 'fmt', '--check', '--', '-dash.toml', 'Cargo.toml', 'sub/a.toml'])
+        with tempfile.TemporaryDirectory() as plain:
+            os.chdir(plain)
+            with mock.patch.object(steps.subprocess, 'run', side_effect=fake), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(steps.toml(['--check']), 1)
+            self.assertIn('git cannot list the TOML files', err.getvalue())
+
     def test_main_names_the_usage_for_unknown_commands(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
