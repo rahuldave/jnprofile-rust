@@ -8,7 +8,7 @@ The profile is for a Rust project with Cargo. The installer finds such a project
 
 ## Install
 
-jnterfaces has no entry for the rust profile yet. [The jnterfaces entry](jnterfaces-entry.md) gives the entry and the change to the installer that the profile needs. After that change, run this command in a project that has the jnterfaces installer:
+jnterfaces has the rust profile since jnterfaces#34. [The jnterfaces entry](jnterfaces-entry.md) keeps the entry and the change to the installer that it took. Run this command in a project that has the jnterfaces installer:
 
 ```bash
 just install --profile rust

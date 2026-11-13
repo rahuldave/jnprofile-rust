@@ -74,9 +74,12 @@ class Spec(unittest.TestCase):
         self.assertIn('gives 1, not 2', (REPO / 'docs/tools.md').read_text())
         self.assertIn('`test-parent` runs no test', (REPO / '.agents/targets/rust/test-review.md').read_text())
         self.assertIn('matches it, `test-parent`', (REPO / '.agents/targets/rust/test-review.md').read_text())
-        for page in ['docs/jnterfaces-entry.md', 'docs/tools.md', '.agents/skills/rust-profile/SKILL.md']:
+        for page in ['docs/jnterfaces-entry.md', 'docs/tools.md', '.agents/skills/rust-profile/SKILL.md', 'README.md',
+                     'docs/index.md']:
             text = (REPO / page).read_text()
             self.assertNotIn('No code of jnterfaces reads the key', text, page)
+            self.assertNotIn('does not do that yet', text, page)
+            self.assertNotIn('has no entry for the rust profile', text, page)
             self.assertNotIn('The change may add only unit tests', text, page)
         self.assertEqual(PROFILE['tests'], ['tests/**'])
 

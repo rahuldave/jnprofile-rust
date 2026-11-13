@@ -17,10 +17,8 @@ pages are in `docs/`. `just docs` shows a preview of the site, and
 
 ## Install
 
-jnterfaces has no entry for the rust profile yet.
-[The jnterfaces entry](docs/jnterfaces-entry.md) gives the entry and the
-change to the installer that the profile needs. After that change, run this
-command in a project that has the jnterfaces installer:
+jnterfaces has the rust profile since jnterfaces#34. Run this command in a
+project that has the jnterfaces installer:
 
 ```bash
 just install --profile rust

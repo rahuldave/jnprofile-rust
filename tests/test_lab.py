@@ -1,8 +1,8 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
-The lab copies the committed jnterfaces from the folder that JNTERFACES names, else from ../jnterfaces next to this
-repository. It applies lab/jnterfaces-rust.patch to that copy and adds the entry of lab/stack-entry.json to its
-stack.json, because jnterfaces has no rust profile yet. It installs this working tree as the package jnprofile-rust,
+The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in ../jnterfaces
+next to this repository. It applies lab/jnterfaces-rust.patch to that copy and adds the entry of lab/stack-entry.json to
+its stack.json, as jnterfaces#34 did later. The fixed commit keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
 as tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, cargo, cargo-llvm-cov and uv, and it runs offline after the first run.
 """
@@ -19,8 +19,11 @@ REPO = Path(__file__).resolve().parents[1]
 JNTERFACES = Path(os.environ.get('JNTERFACES', REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-READY = not MISSING and (JNTERFACES / 'scripts/install_stack.py').is_file()
-WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs jnterfaces in {JNTERFACES}'
+# The commit of jnterfaces that lab/jnterfaces-rust.patch was made for.
+BASE = '2cfb176'
+READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
+                                       capture_output=True).returncode == 0
+WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
 
 LIB = '''//! The crate of the lab.
 
@@ -91,7 +94,7 @@ def make_packages(base):
     packages = base / 'packages'
     jn = packages / 'jnterfaces'
     jn.mkdir(parents=True)
-    archive = subprocess.run(['git', '-C', str(JNTERFACES), 'archive', 'HEAD'], capture_output=True, check=True)
+    archive = subprocess.run(['git', '-C', str(JNTERFACES), 'archive', BASE], capture_output=True, check=True)
     subprocess.run(['tar', '-x', '-C', str(jn)], input=archive.stdout, check=True)
     run(['git', 'init', '-q'], jn, check=True)
     run(['git', 'apply', str(REPO / 'lab/jnterfaces-rust.patch')], jn, check=True)
