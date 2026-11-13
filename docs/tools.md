@@ -2,7 +2,9 @@
 title: The tools
 ---
 
-Each tool of the profile brings its recipes. No tool adds a crate to `Cargo.toml`. The tools are the programs `cargo`, `cargo-llvm-cov` and `uv` of the machine. The recipes have no shebang line, so each line of a recipe runs through the shell of its module, `.agents/just/rust.just`. When that module sets `jlog` as its shell, the run log has each line. A `set shell` in the root Justfile does not reach the recipes of a module.
+Each tool of the profile brings its recipes. No tool adds a crate to `Cargo.toml`. The tools use `cargo`, `uv`, and the programs that the key `programs` of `profile.json` names. The installer installs each of those with rustup or cargo.
+
+The recipes have no shebang line, so each line of a recipe runs through the shell of its module, `.agents/just/rust.just`. When that module sets `jlog` as its shell, the run log has each line. A `set shell` in the root Justfile does not reach the recipes of a module.
 
 The steps run cargo with `--locked`, so a step never makes or changes `Cargo.lock`. Run `just setup` to make the file or to bring it up to date, and commit it. The steps also run with `--all-features`, so the code behind each feature counts. Code behind a feature that cannot be on together with another feature, or code for another platform, such as `#[cfg(windows)]` on macOS, does not count.
 
@@ -16,6 +18,19 @@ Every project of the profile gets the base, even a project with no tool.
 | `just build` | Builds every package of the workspace. Extra arguments go to cargo: `just build --release` |
 
 The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. The leading `/` keeps a module folder such as `src/target/` in git. That file lists the ignored files that a command can make again. Every report of a step goes to `target/`, so a step leaves no file that git sees.
+
+## toml
+
+`toml` is not a default tool. Install it with `just install toml`. It needs `taplo` and `cargo-sort`, and the installer installs both with `cargo +stable install --locked`.
+
+| Recipe | What it does |
+|---|---|
+| `just toml-fmt` | Sorts the tables of each `Cargo.toml` of the workspace with `cargo sort --workspace --no-format`, then formats the TOML files with `taplo fmt` |
+| `just toml-check` | Checks both, and changes no file |
+
+`toml-check` is not a step of the commit gates. So `just verify` runs it, and `just check` and the commit gate do not. A CI job that wants it runs `just rust toml-check`.
+
+`cargo-sort` reads its config `tomlfmt.toml` from the top of the project. When that file is missing and `.config/tomlfmt.toml` exists, the recipe passes that file with `--config`. taplo gets only the TOML files that git tracks or does not ignore, so it never reads `target/`. cargo-sort only sorts, because its format of arrays differs from that of taplo.
 
 ## lint
 

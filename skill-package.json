@@ -23,12 +23,7 @@
       {
         "name": "cargo",
         "check": "cargo --version",
-        "description": "Builds, checks, formats and tests the code, with the rustup components clippy and rustfmt."
-      },
-      {
-        "name": "cargo-llvm-cov",
-        "check": "cargo llvm-cov --version",
-        "description": "Writes the coverage of the tests. It needs the rustup component llvm-tools-preview."
+        "description": "Builds, checks and tests the code. Install Rust with rustup: https://rustup.rs/. The profile installs the rest with rustup and cargo."
       },
       {
         "name": "just",

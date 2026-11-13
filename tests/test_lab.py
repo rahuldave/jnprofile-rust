@@ -463,6 +463,38 @@ class RustLab(unittest.TestCase):
         self.assertEqual(done.returncode, 5, self.out(done))
         self.assertIn('skips tests/api.rs, which is no test target of its package', done.stdout)
 
+    @unittest.skipUnless(shutil.which('taplo') and shutil.which('cargo-sort'), 'needs taplo and cargo-sort')
+    def test_the_toml_tool_checks_and_formats_the_toml_files(self):
+        done = install(self.packages, self.dir, 'toml')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue((self.dir / '.agents/just/rust/toml.just').is_file())
+        done = self.just('rust', 'toml-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        manifest = (self.dir / 'Cargo.toml').read_text()
+        (self.dir / 'Cargo.toml').write_text(manifest.replace('name = "app"', 'name="app"'))
+        self.assertNotEqual(self.just('rust', 'toml-check').returncode, 0)
+        # Unsorted features, and an array long enough to wrap, which cargo-sort and taplo would indent each its own way.
+        long = ', '.join(f'"feature-number-{n}"' for n in range(7))
+        (self.dir / 'Cargo.toml').write_text(manifest + f'\n[features]\nz = []\na = []\nall = [{long}]\n'
+                                             + ''.join(f'feature-number-{n} = []\n' for n in range(7)))
+        self.assertNotEqual(self.just('rust', 'toml-check').returncode, 0)
+        done = self.just('rust', 'toml-fmt')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        done = self.just('rust', 'toml-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        # A TOML file that git ignores, such as one that cargo package writes into target/, is never read.
+        (self.dir / 'target/package').mkdir(parents=True, exist_ok=True)
+        (self.dir / 'target/package/bad.toml').write_text('a="b"\n')
+        done = self.just('rust', 'toml-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertNotIn('target/package', done.stdout)
+        self.assertNotIn('--config', done.stdout)
+        (self.dir / '.config').mkdir()
+        (self.dir / '.config/tomlfmt.toml').write_text('always_trailing_comma = false\n')
+        done = self.just('rust', 'toml-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('--config .config/tomlfmt.toml', done.stdout)
+
     def test_coverage_check_reads_the_report_of_test_only_in_the_same_run_and_tree(self):
         report = self.dir / 'target/llvm-cov/lcov.info'
         env = dict(os.environ, JLOG_RUN='run-one')

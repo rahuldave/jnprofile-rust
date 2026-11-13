@@ -22,6 +22,8 @@ import threading
 import tomllib
 
 DIFF_COVER = 'diff-cover==11.0.1'
+# The other place of the config of cargo-sort, which reads tomlfmt.toml from the current folder.
+SORT_CONFIG = '.config/tomlfmt.toml'
 # The exit codes of test-paths, the same for each profile: the tests passed, a test failed or did not build,
 # the runner itself failed, and no test ran, as pytest gives when it collects none.
 PASSED, FAILED, RUNNER, NO_TEST = 0, 1, 2, 5
@@ -487,8 +489,33 @@ def run_streamed(command):
     return code, ANSI.sub('', ''.join(lines))
 
 
+def toml(args):
+    """Sort each Cargo.toml with cargo-sort, then format the TOML files with taplo, with ARGS such as --check.
+
+    cargo-sort only sorts, with --no-format, because it would indent arrays other than taplo does, and the two
+    would undo each other. taplo gets the TOML files that git tracks or does not ignore, so it never reads target/.
+    cargo-sort reads tomlfmt.toml from the current folder. A project may keep the file in .config/ instead, and then
+    it gets the option --config. Both run, so one run shows every problem; the exit code is 1 when either fails.
+    """
+    command = ['cargo', 'sort', '--workspace', '--no-format', *args]
+    if not Path('tomlfmt.toml').is_file() and Path(SORT_CONFIG).is_file():
+        command += ['--config', SORT_CONFIG]
+    print(shlex.join(command), flush=True)
+    failed = subprocess.run(command).returncode != 0
+    listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.toml')
+    if listed.returncode:
+        print(f'git cannot list the TOML files: {listed.stderr.strip()}', file=sys.stderr, flush=True)
+        return 1
+    files = sorted({name for name in listed.stdout.split('\0') if name and Path(name).is_file()})
+    if files:
+        command = ['taplo', 'fmt', *args, '--', *files]
+        print(shlex.join(command), flush=True)
+        failed = subprocess.run(command).returncode != 0 or failed
+    return 1 if failed else 0
+
+
 def main(argv):
-    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, or test-paths [PATH...]: its exit code."""
+    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, test-paths [PATH...], or toml [--check]: its exit code."""
     if len(argv) == 2 and argv[0] == 'coverage':
         return coverage(argv[1])
     if argv == ['docs']:
@@ -501,7 +528,9 @@ def main(argv):
         return stamp()
     if argv[:1] == ['test-paths']:
         return test_paths(argv[1:])
-    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths [PATH...]', file=sys.stderr)
+    if argv in (['toml'], ['toml', '--check']):
+        return toml(argv[1:])
+    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths [PATH...] | toml [--check]', file=sys.stderr)
     return 2
 
 

@@ -2,6 +2,9 @@
 import json
 from pathlib import Path
 import re
+import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -29,18 +32,67 @@ class Profile(unittest.TestCase):
 
     def test_the_default_tools_give_every_step_and_no_api_tool(self):
         self.assertNotIn('api', PROFILE['tools'])
-        self.assertEqual(set(PROFILE['default_tools']), set(PROFILE['tools']))
-        verify = [step for tool in PROFILE['tools'].values() for step in tool['verify']]
+        self.assertEqual(set(PROFILE['default_tools']), set(PROFILE['tools']) - {'toml'})
+        verify = [step for name in PROFILE['default_tools'] for step in PROFILE['tools'][name]['verify']]
         self.assertEqual(sorted(verify), sorted(STEPS))
         recipes = ''.join((REPO / '.agents/just/rust' / tool['recipes']).read_text()
                           for tool in PROFILE['tools'].values())
         for step in STEPS + ['test-paths']:
             self.assertRegex(recipes, rf'(?m)^{re.escape(step)}\b')
 
-    def test_the_package_needs_cargo_cargo_llvm_cov_just_and_uv(self):
+    def test_the_package_needs_cargo_just_and_uv_and_the_profile_installs_the_rest(self):
         names = [entry['name'] for entry in PACKAGE['executables']['required']]
-        self.assertEqual(names, ['cargo', 'cargo-llvm-cov', 'just', 'uv'])
+        self.assertEqual(names, ['cargo', 'just', 'uv'])
         self.assertEqual(PACKAGE['install_extras']['files'], ['.agents/just/rust', '.agents/targets/rust'])
+
+    def test_the_programs_follow_the_schema_agreed_with_jnterfaces(self):
+        programs = {entry['name']: entry for entry in PROFILE['programs']}
+        self.assertEqual(len(programs), len(PROFILE['programs']))
+        listed = PROFILE['base']['programs'] + [name for tool in PROFILE['tools'].values() for name in tool['programs']]
+        self.assertEqual(set(listed), set(programs))
+        for name, entry in programs.items():
+            self.assertLessEqual(set(entry), {'name', 'check', 'expect', 'install', 'install_in', 'description'}, name)
+            for key in ('check', 'install'):
+                if key in entry:
+                    self.assertNotRegex(entry[key], r'[|&;<>$`*?(){}\\]', f'{name} {key} needs a shell')
+                    self.assertEqual(shlex.join(shlex.split(entry[key])), entry[key], name)
+            if 'install' in entry:
+                self.assertRegex(entry['install'], r'^(cargo \+stable install --locked \S+@\d+\.\d+\.\d+|rustup component add \S+|rustup toolchain install( stable --profile minimal)?)$')
+            else:
+                self.assertIn('https://rustup.rs/', entry['description'], name)
+        # The programs that cannot be installed are checked first, and cargo comes before each cargo install.
+        # Only rustup must be on the machine. cargo --version fails when the pinned toolchain is missing, so cargo
+        # comes with the toolchain, the first program that the profile installs.
+        self.assertEqual(PROFILE['base']['programs'], ['rustup', 'toolchain'])
+        self.assertEqual([name for name in programs if 'install' not in programs[name]], ['rustup'])
+        self.assertEqual(list(programs)[:2], ['rustup', 'toolchain'])
+        self.assertNotIn('cargo', programs)
+        # cargo install builds with the toolchain of the folder, so it runs in the home folder, not under the pin.
+        for name, entry in programs.items():
+            home = entry.get('install', '').startswith(('cargo +stable install', 'rustup toolchain install stable'))
+            self.assertEqual(entry.get('install_in', 'project'), 'home' if home else 'project', name)
+        # cargo install builds with stable, so it needs neither a default toolchain nor the pin of the project.
+        order = list(programs)
+        for name, entry in programs.items():
+            if entry.get('install', '').startswith('cargo +stable install'):
+                self.assertLess(order.index('stable'), order.index(name), name)
+        self.assertEqual(PROFILE['tools']['toml']['programs'], ['stable', 'taplo', 'cargo-sort'])
+        # A program that cargo installs at a fixed version is checked for that version, so an old one is replaced.
+        for name, entry in programs.items():
+            if entry.get('install', '').startswith('cargo +stable install'):
+                version = entry['install'].rsplit('@', 1)[1]
+                self.assertTrue(version.startswith(entry['expect'].rsplit(' ', 1)[1]), name)
+        self.assertNotIn('toml', PROFILE['default_tools'])
+
+    def test_each_check_passes_here_where_the_lab_has_every_program(self):
+        for entry in PROFILE['programs']:
+            command = shlex.split(entry['check'])
+            if not shutil.which(command[0]):
+                continue
+            done = subprocess.run(command, capture_output=True, text=True, cwd=REPO)
+            with self.subTest(program=entry['name']):
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn(entry.get('expect', ''), done.stdout)
 
     def test_the_language_layer_has_a_file_for_each_target(self):
         for target in ('review', 'test-review', 'docs', 'prose'):
