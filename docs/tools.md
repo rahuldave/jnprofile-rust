@@ -59,14 +59,18 @@ A full run of `just test`, with no arguments, takes the worktree tree before the
 
 ## test-paths
 
-`test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file in the folder `tests`, such as `tests/common/mod.rs`, runs every test target of that folder. A unit test lives in the file of its code, such as `src/lib.rs`. A copy of that file in the parent commit brings the new code too, so `test-paths` skips the file and says so.
+`test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. `test-parent` gives it only the changed files that match the key `tests` of `profile.json`, `tests/**`. When no file matches, as in a change with unit tests only, `test-parent` does not call `test-paths`. A unit test lives in the file of its code, such as `src/lib.rs`, and a copy of that file in the parent commit would bring the new code too.
+
+A file `tests/NAME.rs` runs as its test target. Any other file in the folder `tests`, such as `tests/common/mod.rs`, runs every test target of that folder. When called by hand with a file of code, `test-paths` skips the file and says so.
 
 The exit code of `test-paths` tells `test-parent` what happened. Each profile gives the same four codes:
 
 - **0** means the tests ran and passed.
 - **1** means a test failed or did not build. A new test of new code often does not build on the parent, and that is a failure of the test.
-- **5** means no test ran. The change may add only unit tests, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. With no path, `test-paths` runs no test and exits with 5. pytest gives the same code when it collects no test.
+- **5** means no test ran. The files may hold only code and no test file, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. With no path, `test-paths` runs no test and exits with 5. pytest gives the same code when it collects no test.
 - **2** means cargo itself failed, for example on a stale `Cargo.lock` or on a path that it cannot run.
+
+A dependency whose build script fails for an outside reason, such as a missing system library, gives 1, not 2. cargo prints the same lines as for a test that does not build. The spec lists this as a limit of the Rust profile.
 
 cargo exits with 101 both when a test fails or does not build and when it fails itself. So `test-paths` reads the error lines of cargo to tell them apart.
 

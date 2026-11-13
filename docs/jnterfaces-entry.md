@@ -100,8 +100,8 @@ The tests of jnterfaces need a profile `rust` in `PROFILES` and in `RECORDS_PROF
 
 ## What jnterfaces reads from the profile
 
-- **The key `code`** of `profile.json` holds the `@code` globs, here `**/*.rs`. The gate reads them for the required targets. The user approved the name `code`. No code of jnterfaces reads the key yet. The Python and TypeScript profiles need the same key.
-- **The key `tests`** of `profile.json` holds the globs of the test files, here `tests/**`, the folder `tests` at the top of the project. A wider glob such as `**/tests/**` would also take a module in `src/` and bring its new code into the parent. `test-parent` copies only those files into the worktree of the parent. No code of jnterfaces reads the key yet.
+- **The key `code`** of `profile.json` holds the `@code` globs, here `**/*.rs`. The gate reads them for the required targets. The user approved the name `code`. The spec has the installer copy the globs into the key `code` of `.agents/stack.json`, for each profile. The installer at jnterfaces 2cfb176 does not do that yet. The Python and TypeScript profiles need the same key.
+- **The key `tests`** of `profile.json` holds the globs of the test files, here `tests/**`, the folder `tests` at the top of the project. A wider glob such as `**/tests/**` would also take a module in `src/` and bring its new code into the parent. `test-parent` of agent_gest_git_skills reads the key, and copies only those files into the worktree of the parent.
 - **The step names** are the recipe names. The profile gives `fmt-check`, `lint`, `typecheck`, `test`, `coverage-check` and `docstring-check`, and also `test-paths` for the `test-parent` recipe.
 - **The key `verify`** of each tool lists the steps of the tool, so `just rust verify` runs all six steps today.
 - **The folder `.agents/targets/rust/`** is an extra of `skill-package.json`, so the installer copies it as it copies `.agents/just/rust/`.

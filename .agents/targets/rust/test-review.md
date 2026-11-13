@@ -6,8 +6,9 @@ These rules add to the base task for the Rust tests of the change.
   integration test is a file in `tests/`, and it uses only the public API of the crate. A test of a private
   function belongs in the unit tests.
 - **Test-parent and unit tests.** A unit test is in the same file as its code. A copy of that file in the parent
-  commit brings the new code too, so `test-paths` runs only the files in `tests/`. When it runs no test, it exits with 5, and
-  `test-parent` records that no test ran on the parent. Judge each new unit test from the diff alone.
+  commit brings the new code too, so the key `tests` of the profile names only `tests/**`. When no changed file
+  matches it, `test-parent` runs no test and records that no test ran on the parent. Judge each new unit test from
+  the diff alone, and also each test of a workspace member, such as `crates/x/tests/a.rs`, which `tests/**` misses.
 - **Each test checks a result.** A test calls `assert!`, `assert_eq!` or `assert_ne!`, or it returns a `Result`
   and uses `?` on a value that it checks. A test that only calls the code and checks nothing is a finding.
   `#[should_panic]` names the text of the panic with `expected = "..."`.

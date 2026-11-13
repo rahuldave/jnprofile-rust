@@ -66,6 +66,20 @@ class Spec(unittest.TestCase):
         self.assertIn('--cap-lints', (REPO / '.agents/just/rust/steps.py').read_text())
 
 
+    def test_the_docs_follow_the_spec_on_test_files_and_the_code_key(self):
+        spec = (REPO / 'docs/spec.md').read_text()
+        self.assertIn('`test-parent` does not call\n  `test-paths`', spec)
+        self.assertIn('The installer copies them into the key `code`', spec)
+        self.assertIn('does not call `test-paths`', (REPO / 'docs/tools.md').read_text())
+        self.assertIn('gives 1, not 2', (REPO / 'docs/tools.md').read_text())
+        self.assertIn('`test-parent` runs no test', (REPO / '.agents/targets/rust/test-review.md').read_text())
+        self.assertIn('matches it, `test-parent`', (REPO / '.agents/targets/rust/test-review.md').read_text())
+        for page in ['docs/jnterfaces-entry.md', 'docs/tools.md', '.agents/skills/rust-profile/SKILL.md']:
+            text = (REPO / page).read_text()
+            self.assertNotIn('No code of jnterfaces reads the key', text, page)
+            self.assertNotIn('The change may add only unit tests', text, page)
+        self.assertEqual(PROFILE['tests'], ['tests/**'])
+
 class Lint(unittest.TestCase):
     def test_the_recipes_of_the_profile_pass_the_lint(self):
         self.assertEqual([p for path in sorted((REPO / '.agents/just/rust').glob('*.just'))
