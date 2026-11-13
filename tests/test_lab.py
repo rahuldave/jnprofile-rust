@@ -392,9 +392,36 @@ class RustLab(unittest.TestCase):
         (self.dir / 'tests/api.rs').write_text(API_TEST.replace('2);', '3);'))
         self.assertNotEqual(self.just('test-paths', 'tests/api.rs').returncode, 0)
         done = self.just('test-paths', 'src/lib.rs')
-        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertEqual(done.returncode, 5, self.out(done))
         self.assertIn('test-paths: skips src/lib.rs', done.stdout)
         self.assertNotIn('cargo test', done.stdout)
+
+    def test_test_paths_exits_with_5_when_cargo_runs_no_test(self):
+        (self.dir / 'tests/empty.rs').write_text('//! Helpers and no test.\n')
+        done = self.just('test-paths', 'tests/empty.rs')
+        self.assertEqual(done.returncode, 5, self.out(done))
+        self.assertIn('the test targets hold no test', done.stdout)
+        manifest = (self.dir / 'Cargo.toml').read_text()
+        (self.dir / 'tests/plain.rs').write_text('//! A test with its own main.\n\nfn main() {}\n')
+        (self.dir / 'Cargo.toml').write_text(manifest + '\n[[test]]\nname = "plain"\nharness = false\n')
+        done = self.just('test-paths', 'tests/plain.rs')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('Running tests/plain.rs', done.stdout)
+        loud = dict(os.environ, CARGO_TERM_COLOR='always', CARGO_TERM_QUIET='true')
+        self.assertEqual(self.just('test-paths', 'tests/plain.rs', env=loud).returncode, 0)
+        self.assertEqual(self.just('test-paths', 'tests/plain.rs', env=dict(loud, CARGO_TERM_QUIET='false',
+                                                                             CARGO_TERM_VERBOSE='true')).returncode, 0)
+        (self.dir / 'tests/plain.rs').unlink()
+        (self.dir / 'Cargo.toml').write_text(manifest)
+        (self.dir / 'tests/empty.rs').unlink()
+        (self.dir / 'tests/api.rs').unlink()
+        (self.dir / 'tests/common').mkdir()
+        (self.dir / 'tests/common/mod.rs').write_text('//! A helper.\n')
+        done = self.just('test-paths', 'tests/common/mod.rs')
+        self.assertEqual(done.returncode, 5, self.out(done))
+        self.assertIn('no test target in the folder tests', done.stdout)
+        done = self.just('test-paths', 'tests/common/mod.rs', env=dict(os.environ, CARGO_TERM_COLOR='always'))
+        self.assertEqual(done.returncode, 5, self.out(done))
 
     def test_coverage_check_reads_the_report_of_test_only_in_the_same_run_and_tree(self):
         report = self.dir / 'target/llvm-cov/lcov.info'

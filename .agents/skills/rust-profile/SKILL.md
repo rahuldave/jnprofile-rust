@@ -62,6 +62,9 @@ does not.
   A file `tests/NAME.rs` runs the test target `NAME`. Any other file in the
   folder `tests` runs every test target of that folder. It skips a file of
   code, such as `src/lib.rs`, because its unit tests live with the new code.
+  It exits with 0 when the tests pass, and with 5 when no test ran, such as
+  when the test targets hold only ignored tests. Any other code means a test failed or
+  cargo could not build the tests.
 
 ## Lines that no test can run
 

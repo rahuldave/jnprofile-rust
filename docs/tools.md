@@ -61,6 +61,16 @@ A full run of `just test`, with no arguments, takes the worktree tree before the
 
 `test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. A file `tests/NAME.rs` runs as the test target `NAME`. Any other file in the folder `tests`, such as `tests/common/mod.rs`, runs every test target of that folder. A unit test lives in the file of its code, such as `src/lib.rs`. A copy of that file in the parent commit brings the new code too, so `test-paths` skips the file and says so.
 
+The exit code of `test-paths` tells `test-parent` what happened:
+
+- **0** means the tests ran and passed.
+- **5** means no test ran. The change may add only unit tests, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. pytest gives the same code when it collects no test.
+- **Any other code** means a test failed or cargo could not build the tests.
+
+`test-paths` reads the output of cargo to count the tests that ran. So it runs cargo with no colors and with neither quiet nor verbose output, whatever the settings of `CARGO_TERM_COLOR`, `CARGO_TERM_QUIET` and `CARGO_TERM_VERBOSE`. A target with `harness = false` prints no count, so its run counts as a test that ran.
+
+A test target needs the name of its file. If `Cargo.toml` names a `[[test]]` other than its file, or turns off `autotests`, cargo finds no target of that name. Then `test-paths` fails with the code of cargo.
+
 ## docstring
 
 | Recipe | What it does |

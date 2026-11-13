@@ -13,13 +13,27 @@ the project, which can be a subfolder of the git repository.
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 
 DIFF_COVER = 'diff-cover==11.0.1'
+# The exit code of test-paths when it runs no test, as pytest gives when it collects none.
+NO_TEST = 5
+# What cargo prints when no test target matches the name or the pattern.
+NO_TARGET = re.compile(r'^error: no test target matches pattern', re.M)
+# The line of cargo for each test binary that it starts; a binary with harness = false prints no test result.
+RUNNING = re.compile(r'^\s*Running \S', re.M)
+# The escape codes of terminal colors, which a test may still print.
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+# The seconds with no new line, once the command ends, after which the copy of its output stops.
+LINGER = 2
+# The summary line of each test binary: the numbers of the passed and of the failed tests.
+TEST_RESULT = re.compile(r'^test result: \w+\. (\d+) passed; (\d+) failed;', re.M)
 GENERATED = '.agents/generated.txt'
 COVERAGE_EXCLUDE = '.agents/coverage-exclude.txt'
 REPORT = Path('target/llvm-cov/lcov.info')
@@ -364,18 +378,60 @@ def test_commands(paths):
 
 
 def test_paths(paths):
-    """Run the tests of PATHS without coverage, and return the exit code of the first command that fails."""
+    """Run the tests of PATHS without coverage: 0 when they pass, NO_TEST when none ran, else the failure code.
+
+    A failure never returns 0 or NO_TEST, so the test-parent recipe can tell the three apart.
+    """
     commands, skipped = test_commands(paths)
     for path in skipped:
         print(f'test-paths: skips {path}, which is not in the folder tests of a package', flush=True)
     if not commands:
         print('test-paths: no file in the folder tests of a package, so no test ran', flush=True)
+        return NO_TEST
+    ran = 0
     for command in commands:
         print(shlex.join(command), flush=True)
-        code = subprocess.run(command).returncode
+        code, out = run_streamed(command)
+        if code and NO_TARGET.search(out) and not RUNNING.search(out) and 'could not compile' not in out:
+            print('test-paths: no test target in the folder tests, so no test ran', flush=True)
+            continue
         if code:
-            return code
+            return code if 0 < code < 256 and code != NO_TEST else 1
+        results = TEST_RESULT.findall(out)
+        ran += sum(int(a) + int(b) for a, b in results)
+        ran += max(0, len(RUNNING.findall(out)) - len(results))
+    if not ran:
+        print('test-paths: the test targets hold no test that is not ignored, so no test ran', flush=True)
+        return NO_TEST
     return 0
+
+
+def run_streamed(command):
+    """Run COMMAND with its stderr in its stdout, copy each line out as it comes, and return the code and the text.
+
+    The output of cargo is plain, with no colors, no quiet and no verbose lines, so the patterns match it. Once
+    COMMAND ends, the copy goes on while lines still come, so a slow reader of stdout loses none. A process that
+    COMMAND left running and that holds the pipe open, but prints nothing, does not keep this one waiting.
+    """
+    env = dict(os.environ, CARGO_TERM_COLOR='never', CARGO_TERM_QUIET='false', CARGO_TERM_VERBOSE='false')
+    lines = []
+
+    def copy(pipe):
+        """Copy each line of PIPE to stdout and keep its text."""
+        for line in pipe:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+            lines.append(line.decode('utf-8', 'replace'))
+
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    reader = threading.Thread(target=copy, args=(child.stdout,), daemon=True)
+    reader.start()
+    code = child.wait()
+    seen = -1
+    while reader.is_alive() and len(lines) != seen:
+        seen = len(lines)
+        reader.join(LINGER)
+    return code, ANSI.sub('', ''.join(lines))
 
 
 def main(argv):
