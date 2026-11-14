@@ -17,7 +17,6 @@ checker := env("NOSSAIFD_CHECK", home_directory() / "Projects/nossaifd/check.py"
 lint:
     {{python}} -m json.tool profile.json > /dev/null
     {{python}} -m json.tool skill-package.json > /dev/null
-    {{python}} -m json.tool lab/stack-entry.json > /dev/null
     {{python}} -m py_compile .agents/just/rust/steps.py lab/lint_just.py tests/test_lab.py tests/test_steps.py tests/test_profile.py
     {{python}} lab/lint_just.py .agents/just/rust
 

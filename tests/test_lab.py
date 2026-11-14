@@ -1,14 +1,18 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in ../jnterfaces
-next to this repository. It applies lab/jnterfaces-rust.patch to that copy and adds the entry of lab/stack-entry.json to
-its stack.json, as jnterfaces#34 did later. The fixed commit keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
+next to this repository. BASE has the rust entry of jnterfaces#34 and the programs of jnterfaces#39. The fixed commit
+keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
 as tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
-stand-in packages. The lab needs git, just, cargo, cargo-llvm-cov and uv, and it runs offline after the first run.
+stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json
+that it installs. It skips when a check of such a program fails, so that the installer of the lab never installs a
+program on the machine. It runs offline after the first run.
 """
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,10 +21,10 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 JNTERFACES = Path(os.environ.get('JNTERFACES', REPO.parent / 'jnterfaces'))
-TOOLS = ('git', 'just', 'cargo', 'cargo-llvm-cov', 'uv')
+TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The commit of jnterfaces that lab/jnterfaces-rust.patch was made for.
-BASE = '2cfb176'
+# The merge of jnterfaces#39, which installs the programs of a profile.
+BASE = 'f9e66f7d6fac47cc0add332138be355b609e1dd1'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -59,6 +63,15 @@ pub fn double(a: i32) -> i32 {
 CARGO = '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n'
 
 
+# A stand-in jlog: it logs each line that just gives it, then runs the line. The commands of jlog itself, such as
+# jlog step test at the end of a step of the index, do nothing.
+STAND_IN_JLOG = """#!/bin/sh
+case "$1" in step|skip|pass|session|env|tools) exit 0 ;; esac
+printf "%s\\n" "$3" >> "{log}"
+exec "$@"
+"""
+
+
 def run(args, cwd, env=None, check=False):
     """Run ARGS in CWD with no input, and return the finished process with its output as text."""
     done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
@@ -89,18 +102,45 @@ def stand_in(root, name, skill):
     commit(root)
 
 
+# What the installer prints before it installs a program.
+INSTALLING = 'failed, so the installer runs'
+PROFILE = json.loads((REPO / 'profile.json').read_text())
+
+
+def missing_programs(names, env=None):
+    """The programs of NAMES whose check fails, or does not print its expect, in an empty folder with no pin.
+    RUSTUP_AUTO_INSTALL=0 stops rustup from installing a missing toolchain during a check."""
+    programs = {entry['name']: entry for entry in PROFILE['programs']}
+    env = dict(env or os.environ, RUSTUP_AUTO_INSTALL='0')
+    missing = []
+    with tempfile.TemporaryDirectory() as folder:
+        for name in names:
+            entry = programs[name]
+            try:
+                done = subprocess.run(shlex.split(entry['check']), cwd=folder, capture_output=True, text=True,
+                                      stdin=subprocess.DEVNULL, timeout=300, env=env)
+            except (OSError, subprocess.TimeoutExpired):
+                missing.append(name)
+                continue
+            if done.returncode or entry.get('expect', '') not in done.stdout:
+                missing.append(name)
+    return missing
+
+
+def doc_entry():
+    """The entry of stack.json that docs/jnterfaces-entry.md shows."""
+    doc = (REPO / 'docs/jnterfaces-entry.md').read_text()
+    return json.loads(re.search(r'```json\n(.*?)```', doc, re.S).group(1))
+
+
 def make_packages(base):
-    """Make the folder of package clones: jnterfaces with the patch, this profile, and the stand-in roles."""
+    """Make the folder of package clones: jnterfaces at BASE, this profile, and the stand-in roles."""
     packages = base / 'packages'
     jn = packages / 'jnterfaces'
     jn.mkdir(parents=True)
     archive = subprocess.run(['git', '-C', str(JNTERFACES), 'archive', BASE], capture_output=True, check=True)
     subprocess.run(['tar', '-x', '-C', str(jn)], input=archive.stdout, check=True)
     run(['git', 'init', '-q'], jn, check=True)
-    run(['git', 'apply', str(REPO / 'lab/jnterfaces-rust.patch')], jn, check=True)
-    stack = json.loads((jn / 'stack.json').read_text())
-    stack['profiles'].update(json.loads((REPO / 'lab/stack-entry.json').read_text()))
-    (jn / 'stack.json').write_text(json.dumps(stack, indent=2) + '\n')
     commit(jn)
     profile = packages / 'jnprofile-rust'
     shutil.copytree(REPO, profile, ignore=shutil.ignore_patterns('.git', 'target', '_site', '__pycache__'))
@@ -112,10 +152,25 @@ def make_packages(base):
 
 
 def install(packages, target, *args):
-    """Run the patched installer of the lab copy of jnterfaces on TARGET, and return the finished process."""
+    """Run the installer of the lab copy of jnterfaces on TARGET, and return the finished process."""
     env = {k: v for k, v in os.environ.items() if k not in ('SKILL_PACKAGES_DIR', 'VIRTUAL_ENV')}
     return run([sys.executable, str(packages / 'jnterfaces/scripts/install_stack.py'), '--target', str(target),
                 *args], target, env=env)
+
+
+@unittest.skipUnless(shutil.which('rustup'), 'needs rustup')
+class Guard(unittest.TestCase):
+    def test_the_guard_finds_a_missing_default_toolchain_and_downloads_nothing(self):
+        # rustup 1.29 installs a missing toolchain during a check. The guard turns that off, so a default toolchain
+        # that is set but not installed counts as missing. The servers point at a closed port in case it did not.
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / 'settings.toml').write_text('version = "12"\ndefault_toolchain = "stable"\n')
+            env = {k: v for k, v in os.environ.items() if not k.startswith('RUSTUP_')}
+            env.update(RUSTUP_HOME=home, RUSTUP_DIST_SERVER='http://127.0.0.1:9',
+                       RUSTUP_UPDATE_ROOT='http://127.0.0.1:9/rustup')
+            self.assertEqual(missing_programs(['rustup', 'toolchain', 'rustfmt', 'llvm-tools'], env),
+                             ['toolchain', 'rustfmt', 'llvm-tools'])
+            self.assertEqual(os.listdir(home), ['settings.toml'])
 
 
 @unittest.skipUnless(READY, WHY)
@@ -125,6 +180,11 @@ class RustLab(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Make the packages, a Cargo project with tested and documented code, install the profile, and build."""
+        needed = PROFILE['base']['programs'] + [name for tool in PROFILE['default_tools']
+                                                for name in PROFILE['tools'][tool]['programs']]
+        missing = missing_programs(needed)
+        if missing:
+            raise unittest.SkipTest(f'needs the programs {", ".join(missing)}, which the lab must not install')
         cls.temp = tempfile.TemporaryDirectory()
         cls.base = Path(os.path.realpath(cls.temp.name))
         cls.packages = make_packages(cls.base)
@@ -181,6 +241,38 @@ class RustLab(unittest.TestCase):
         for step in ('fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check', 'test-paths'):
             self.assertIn(step, summary)
         self.assertNotIn('api', ' '.join(summary))
+
+    def test_jnterfaces_has_the_entry_of_the_doc_and_the_installer_finds_every_program(self):
+        stack = json.loads((self.packages / 'jnterfaces/stack.json').read_text())
+        self.assertEqual({'rust': stack['profiles']['rust']}, doc_entry())
+        self.assertEqual(self.installed.returncode, 0, self.out(self.installed))
+        self.assertNotIn(INSTALLING, self.out(self.installed))
+        done = install(self.packages, self.app, '--check')
+        self.assertNotIn('Missing program', self.out(done))
+        self.assertNotIn('are not checked', self.out(done))
+
+    def test_without_rustup_the_installer_names_rustup_and_writes_nothing(self):
+        target = self.base / 'norustup'
+        (target / 'src').mkdir(parents=True)
+        (target / 'Cargo.toml').write_text(CARGO)
+        (target / 'src/lib.rs').write_text(LIB)
+        git(target, 'init', '-q')
+        commit(target)
+        # A PATH with the programs of jnterfaces and the system, and with no rustup and no cargo.
+        bin_dir = self.base / 'norustup-bin'
+        bin_dir.mkdir()
+        for name in ('git', 'just', 'uv', 'jlog'):
+            if shutil.which(name):
+                (bin_dir / name).symlink_to(shutil.which(name))
+        env = {k: v for k, v in os.environ.items() if k not in ('SKILL_PACKAGES_DIR', 'VIRTUAL_ENV')}
+        env['PATH'] = f'{bin_dir}:/usr/bin:/bin'
+        if shutil.which('rustup', path=env['PATH']):
+            self.skipTest('rustup is in /usr/bin or /bin')
+        done = run([sys.executable, str(self.packages / 'jnterfaces/scripts/install_stack.py'), '--target', str(target),
+                    '--profile', 'rust', '--defaults'], target, env=env)
+        self.assertNotEqual(done.returncode, 0, self.out(done))
+        self.assertIn('https://rustup.rs/', self.out(done))
+        self.assertEqual(git(target, 'status', '--porcelain', '--ignored'), '')
 
     def test_a_new_folder_gets_cargo_init_from_the_profile(self):
         target = self.base / 'empty'
@@ -282,7 +374,8 @@ class RustLab(unittest.TestCase):
             LIB + '\n/// Generated.\npub mod gen {\n    include!(concat!(env!("OUT_DIR"), "/gen.rs"));\n}\n')
         done = self.just('docstring-check')
         self.assertEqual(done.returncode, 0, self.out(done))
-        self.assertEqual(done.stdout, '')
+        # jlog prints the record of the step that passed. Nothing else is on the output: no warning of a missing doc.
+        self.assertEqual([line for line in done.stdout.splitlines() if not line.startswith('{"kind":"step"')], [])
 
     def test_test_with_a_name_runs_only_the_tests_that_match(self):
         done = self.just('test', 'add_sums')
@@ -463,10 +556,13 @@ class RustLab(unittest.TestCase):
         self.assertEqual(done.returncode, 5, self.out(done))
         self.assertIn('skips tests/api.rs, which is no test target of its package', done.stdout)
 
-    @unittest.skipUnless(shutil.which('taplo') and shutil.which('cargo-sort'), 'needs taplo and cargo-sort')
     def test_the_toml_tool_checks_and_formats_the_toml_files(self):
+        missing = missing_programs(PROFILE['tools']['toml']['programs'])
+        if missing:
+            self.skipTest(f'needs the programs {", ".join(missing)}, which the lab must not install')
         done = install(self.packages, self.dir, 'toml')
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn(INSTALLING, self.out(done))
         self.assertTrue((self.dir / '.agents/just/rust/toml.just').is_file())
         done = self.just('rust', 'toml-check')
         self.assertEqual(done.returncode, 0, self.out(done))
@@ -522,15 +618,16 @@ class RustLab(unittest.TestCase):
         bin_dir.mkdir()
         log = self.base / 'once.lines'
         log.unlink(missing_ok=True)
-        (bin_dir / 'jlog').write_text(f'#!/bin/sh\nprintf "%s\\n" "$3" >> "{log}"\nexec "$@"\n')
+        (bin_dir / 'jlog').write_text(STAND_IN_JLOG.format(log=log))
         (bin_dir / 'jlog').chmod(0o755)
-        module = self.dir / '.agents/just/rust.just'
-        module.write_text(module.read_text().replace('set positional-arguments',
-                                                     'set positional-arguments\nset shell := ["jlog", "sh", "-cu"]'))
+        # The installer writes the shell into the module, as the spec says. The stand-in comes first on PATH.
+        self.assertIn('set shell := ["jlog", "sh", "-cu"]',
+                      (self.dir / '.agents/just/rust.just').read_text().splitlines())
         justfile = self.dir / 'Justfile'
-        # A root recipe with the two steps, as just check will have them. The index runs each in an inner just call.
-        justfile.write_text('export JLOG_RUN := env("JLOG_RUN", uuid())\n' + justfile.read_text()
-                            + '\ngates: test coverage-check\n')
+        # The installer writes the line of the run ID. A root recipe has the two steps, as just check will have
+        # them. The index runs each in an inner just call.
+        self.assertIn('export JLOG_RUN := env("JLOG_RUN", uuid())', justfile.read_text().splitlines())
+        justfile.write_text(justfile.read_text() + '\ngates: test coverage-check\n')
         env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
         env['PATH'] = f'{bin_dir}:{env["PATH"]}'
         done = self.just('gates', env=env)
@@ -565,11 +662,11 @@ class RustLab(unittest.TestCase):
         bin_dir.mkdir()
         log = self.base / 'jlog.lines'
         log.unlink(missing_ok=True)
-        (bin_dir / 'jlog').write_text(f'#!/bin/sh\nprintf "%s\\n" "$3" >> "{log}"\nexec "$@"\n')
+        (bin_dir / 'jlog').write_text(STAND_IN_JLOG.format(log=log))
         (bin_dir / 'jlog').chmod(0o755)
-        module = self.dir / '.agents/just/rust.just'
-        module.write_text(module.read_text().replace('set positional-arguments',
-                                                     'set positional-arguments\nset shell := ["jlog", "sh", "-cu"]'))
+        # The installer writes the shell into the module, as the spec says. The stand-in comes first on PATH.
+        self.assertIn('set shell := ["jlog", "sh", "-cu"]',
+                      (self.dir / '.agents/just/rust.just').read_text().splitlines())
         env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}')
         done = self.just('rust', 'verify', env=env)
         self.assertEqual(done.returncode, 0, self.out(done))
