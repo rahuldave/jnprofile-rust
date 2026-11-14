@@ -8,7 +8,7 @@ The profile is for a Rust project with Cargo. The installer finds such a project
 
 ## Install
 
-jnterfaces has the rust profile since jnterfaces#34. [The jnterfaces entry](jnterfaces-entry.md) keeps the entry and the change to the installer that it took. Run this command in a project that has the jnterfaces installer:
+jnterfaces has the rust profile since jnterfaces#34, and installs its programs since jnterfaces#39. [The jnterfaces entry](jnterfaces-entry.md) keeps the entry and the change to the installer that it took. Run this command in a project that has the jnterfaces installer:
 
 ```bash
 just install --profile rust
@@ -23,7 +23,7 @@ The installer checks the programs of each tool that it installs, in the project 
 | Program | Use | Install |
 |---|---|---|
 | `rustup` | Every step | https://rustup.rs/. The installer stops if it is missing. |
-| The toolchain, with `cargo` | Every step | The profile runs `rustup toolchain install` when the toolchain that `rust-toolchain.toml` or `rust-toolchain` pins is missing |
+| The toolchain, with `cargo` | Every step | The profile runs `rustup toolchain install` when the toolchain that `rust-toolchain.toml` or `rust-toolchain` pins is missing. With no pin and no default toolchain, run `rustup default stable` yourself |
 | `rustfmt` and `clippy` | `fmt`, `fmt-check`, `lint` and `docstring-check` | The profile runs `rustup component add` |
 | `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1` |
 | `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4` |

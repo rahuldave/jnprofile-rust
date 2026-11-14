@@ -1,5 +1,6 @@
 """Tests of the files of the profile: profile.json, skill-package.json, the recipes and the language layer."""
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -15,6 +16,14 @@ import lint_just  # noqa: E402
 
 PROFILE = json.loads((REPO / 'profile.json').read_text())
 PACKAGE = json.loads((REPO / 'skill-package.json').read_text())
+
+
+def doc_entry():
+    """The entry of stack.json that docs/jnterfaces-entry.md shows."""
+    doc = (REPO / 'docs/jnterfaces-entry.md').read_text()
+    return json.loads(re.search(r'```json\n(.*?)```', doc, re.S).group(1))
+
+
 STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check']
 
 
@@ -61,8 +70,8 @@ class Profile(unittest.TestCase):
             else:
                 self.assertIn('https://rustup.rs/', entry['description'], name)
         # The programs that cannot be installed are checked first, and cargo comes before each cargo install.
-        # Only rustup must be on the machine. cargo --version fails when the pinned toolchain is missing, so cargo
-        # comes with the toolchain, the first program that the profile installs.
+        # Only rustup must be on the machine. cargo --version can fail when the pinned toolchain is missing, so
+        # cargo comes with the toolchain, the first program that the profile installs.
         self.assertEqual(PROFILE['base']['programs'], ['rustup', 'toolchain'])
         self.assertEqual([name for name in programs if 'install' not in programs[name]], ['rustup'])
         self.assertEqual(list(programs)[:2], ['rustup', 'toolchain'])
@@ -89,7 +98,9 @@ class Profile(unittest.TestCase):
             command = shlex.split(entry['check'])
             if not shutil.which(command[0]):
                 continue
-            done = subprocess.run(command, capture_output=True, text=True, cwd=REPO)
+            # RUSTUP_AUTO_INSTALL=0: a check must not install a missing toolchain on the machine.
+            done = subprocess.run(command, capture_output=True, text=True, cwd=REPO,
+                                  env=dict(os.environ, RUSTUP_AUTO_INSTALL='0'))
             with self.subTest(program=entry['name']):
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn(entry.get('expect', ''), done.stdout)
@@ -98,14 +109,31 @@ class Profile(unittest.TestCase):
         for target in ('review', 'test-review', 'docs', 'prose'):
             self.assertTrue((REPO / f'.agents/targets/rust/{target}.md').is_file(), target)
 
-    def test_the_jnterfaces_entry_doc_shows_the_entry_of_the_lab(self):
-        entry = json.loads((REPO / 'lab/stack-entry.json').read_text())
-        doc = (REPO / 'docs/jnterfaces-entry.md').read_text()
-        block = re.search(r'```json\n(.*?)```', doc, re.S).group(1)
-        self.assertEqual(json.loads(block), entry)
-        patch = (REPO / 'lab/jnterfaces-rust.patch').read_text()
-        self.assertIn(patch.strip(), doc)
+    def test_the_jnterfaces_entry_doc_shows_an_entry_that_finds_a_cargo_project(self):
+        # The lab checks that the stack.json of jnterfaces has this entry.
+        entry = doc_entry()
+        self.assertEqual(entry['rust']['package'], 'jnprofile-rust')
+        self.assertEqual(entry['rust']['detect'], PROFILE['detect'])
 
+    def test_without_a_default_toolchain_the_install_of_toolchain_fails_and_its_description_says_what_to_do(self):
+        # In an empty rustup home, with no pin, the check and the install of toolchain fail. The installer then
+        # prints the description. The profile does not set a default itself. The servers point at a closed port, so
+        # that a rustup that tried to download would fail at once instead.
+        if not shutil.which('rustup'):
+            self.skipTest('needs rustup')
+        programs = {entry['name']: entry for entry in PROFILE['programs']}
+        self.assertNotIn('rustup default', ' '.join(entry.get('install', '') for entry in PROFILE['programs']))
+        self.assertIn('rustup default stable', programs['toolchain']['description'])
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as project:
+            env = {k: v for k, v in os.environ.items() if not k.startswith('RUSTUP_')}
+            env.update(RUSTUP_HOME=home, RUSTUP_DIST_SERVER='http://127.0.0.1:9',
+                       RUSTUP_UPDATE_ROOT='http://127.0.0.1:9/rustup')
+            for command in (programs['toolchain']['check'], programs['toolchain']['install']):
+                done = subprocess.run(shlex.split(command), cwd=project, env=env, capture_output=True, text=True,
+                                      stdin=subprocess.DEVNULL, timeout=60)
+                with self.subTest(command=command):
+                    self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertEqual(os.listdir(home), [], 'the commands wrote into the empty rustup home')
 
 class Spec(unittest.TestCase):
     def test_the_spec_and_the_docs_agree_on_w_for_docstring_check(self):

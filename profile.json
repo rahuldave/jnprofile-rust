@@ -45,7 +45,7 @@
       "name": "toolchain",
       "check": "rustup show active-toolchain",
       "install": "rustup toolchain install",
-      "description": "The toolchain that the rust-toolchain.toml or rust-toolchain file of the project pins, else the default toolchain of rustup. It brings cargo and rustc."
+      "description": "The toolchain that the rust-toolchain.toml or rust-toolchain file of the project pins, else the default toolchain of rustup. It brings cargo and rustc. With no pin and no default toolchain, rustup cannot choose one, and the install fails: run rustup default stable, or pin a toolchain in rust-toolchain.toml."
     },
     {
       "name": "rustfmt",
