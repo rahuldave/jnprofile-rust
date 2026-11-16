@@ -64,7 +64,8 @@ class Rule(Folder):
         self.write('.agents/stack.json', json.dumps({'tools': list(tools), 'choices': {'docs': docs}}))
 
     def is_api(self, *paths):
-        script = (f'import importlib.util, json, sys\nspec = importlib.util.spec_from_file_location("r", {str(RULE)!r})\n'
+        script = ('import importlib.util, json, sys\n'
+                  f'spec = importlib.util.spec_from_file_location("r", {str(RULE)!r})\n'
                   'r = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(r)\n'
                   'print(json.dumps([r.is_api(p) for p in sys.argv[1:]]))')
         done = subprocess.run([sys.executable, '-I', '-B', '-c', script, *paths], cwd=self.root, capture_output=True,
@@ -328,6 +329,14 @@ class Parts(Folder):
         with tempfile.TemporaryDirectory() as temp:
             self.assertEqual(steps.api_settings(Path(temp))[0], None)
 
+    def test_every_uv_run_of_the_steps_names_python_3_11_or_later(self):
+        source = (REPO / '.agents/just/rust/steps.py').read_text()
+        self.assertEqual(steps.UV_RUN[-2:], ['--python', '>=3.11'])
+        self.assertNotIn("'uv', 'run'", source.replace("UV_RUN = ['uv', 'run'", ''))
+        self.assertEqual(steps.smalldocs('x')[:len(steps.UV_RUN)], steps.UV_RUN)
+        base = (REPO / '.agents/just/rust/base.just').read_text()
+        self.assertIn("uv run --no-project --quiet --python '>=3.11'", base)
+
     def test_the_pin_of_steps_is_the_nightly_of_the_profile(self):
         nightly = {entry['name']: entry for entry in PROFILE['programs']}['nightly']
         self.assertEqual(nightly['check'], f'rustup run {steps.NIGHTLY} rustc --version')
@@ -458,6 +467,15 @@ class Smalldocs(Folder):
         self.assertEqual(code, 0, out)
         self.assertIn('with the crate app', out)
 
+    def test_api_check_and_prose_run_when_uv_would_pick_python_3_9(self):
+        self.checker()
+        self.write('src/lib.rs', self.DOCUMENTED + '\n')
+        code, out = self.api('api', 'check', env={'UV_PYTHON': '3.9'})
+        self.assertEqual(code, 0, out)
+        code, out = self.api('api', 'prose', env={'UV_PYTHON': '3.9'})
+        self.assertEqual(code, 0, out)
+        self.assertIn('the module comment of src/lib.rs', out)
+
     def test_prose_without_the_checker_passes_with_a_word(self):
         code, out = self.api('api', 'prose')
         self.assertEqual(code, 0, out)
@@ -491,7 +509,8 @@ class Smalldocs(Folder):
         self.write(str(steps.PROSE_GATE), 'import subprocess\n'
                    'def ci_set():\n    return False\n'
                    'def base_commit(top, ref):\n'
-                   '    out = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=top, capture_output=True, text=True)\n'
+                   '    out = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=top, capture_output=True,\n'
+                   '                         text=True)\n'
                    '    return out.stdout.strip(), ref\n')
         git(self.root, 'branch', 'main')
         self.write('src/lib.rs', self.DOCUMENTED.replace('It adds.', 'It adds, BAD.'))

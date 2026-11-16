@@ -1,12 +1,13 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
-The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in ../jnterfaces
-next to this repository. BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39, jlog v0.1.1 and the order of #52. The fixed commit
-keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
-as tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
-stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json
-that it installs. It skips when a check of such a program fails, so that the installer of the lab never installs a
-program on the machine. It runs offline after the first run.
+The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
+SKILL_PACKAGES_DIR/jnterfaces, else in ../jnterfaces next to this repository. BASE has the rust entry of jnterfaces#34,
+the programs of jnterfaces#39, jlog v0.1.1 and the order of #52. The fixed commit keeps the lab the same when the clone
+moves on. It installs this working tree as the package jnprofile-rust, as tests/test_install_stack.py of jnterfaces
+makes its profile packages. The roles tasker and prose come from small stand-in packages. The lab needs git, just,
+rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that it installs. It skips when a check of such a
+program fails, so that the installer of the lab never installs a program on the machine. It runs offline after the first
+run.
 """
 import json
 import os
@@ -20,12 +21,16 @@ import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
-JNTERFACES = Path(os.environ.get('JNTERFACES', REPO.parent / 'jnterfaces'))
+# The clone of jnterfaces: JNTERFACES, else jnterfaces in the folder of package clones SKILL_PACKAGES_DIR, as in CI,
+# else ../jnterfaces.
+PACKAGES_DIR = os.environ.get('SKILL_PACKAGES_DIR')
+JNTERFACES = Path(os.environ.get('JNTERFACES')
+                  or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#54. It installs the programs of a profile (#39), pins jlog v0.1.1 (#44), runs integration
-# before coverage-check (#52), and runs integration once in just verify (#54).
-BASE = '4b9b52df7242ed9cc25d32c93e3119e2101a5861'
+# The merge of jnterfaces#55. It installs the programs of a profile (#39), pins jlog v0.1.1 (#44), runs integration
+# before coverage-check (#52), runs integration once in just verify (#54), and pins smalldocs 0.5.12 (#55).
+BASE = '338ca39105397177d51fdc1bbb555b80f2bc22de'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -180,6 +185,32 @@ class Guard(unittest.TestCase):
             self.assertEqual(os.listdir(home), ['settings.toml'])
 
 
+@unittest.skipUnless(os.environ.get('CI', '').strip().lower() not in ('', 'false', '0'), 'only in CI')
+class Ci(unittest.TestCase):
+    """In CI, the lab must run, not skip: each tool, the clone of jnterfaces and each program are there."""
+
+    def test_ci_has_everything_that_the_lab_needs(self):
+        self.assertEqual(MISSING, [])
+        self.assertTrue(READY, WHY)
+        self.assertEqual(missing_programs([entry['name'] for entry in PROFILE['programs']]), [])
+
+
+class Workflow(unittest.TestCase):
+    """The workflow of CI pins what the lab pins."""
+
+    def test_the_workflow_clones_jnterfaces_at_the_commit_of_the_lab_and_runs_just_check(self):
+        text = (REPO / '.github/workflows/verify.yml').read_text()
+        self.assertIn(BASE, text)
+        self.assertIn('SKILL_PACKAGES_DIR', text)
+        self.assertIn('python3 lab/ci_programs.py', text)
+        self.assertRegex(text, r'(?m)^\s+run: just check$')
+
+    def test_lint_runs_ruff_at_a_fixed_version(self):
+        justfile = (REPO / 'Justfile').read_text()
+        self.assertRegex(justfile, r'(?m)^ruff := "uvx --quiet ruff@\d+\.\d+\.\d+"$')
+        self.assertRegex(justfile, r'(?m)^lint:\n    \{\{ruff\}\} check \.$')
+
+
 @unittest.skipUnless(READY, WHY)
 class Pin(unittest.TestCase):
     """The docs agree with the commit of jnterfaces that the lab pins. This needs only git and the clone."""
@@ -200,7 +231,7 @@ class Pin(unittest.TestCase):
             text = (REPO / page).read_text()
             self.assertIn(f'`{BASE[:7]}`', text, page)
             # No other commit of the lab: the old pins are gone.
-            for old in ('f9e66f7', '7fe6811'):
+            for old in ('f9e66f7', '7fe6811', '4b9b52d'):
                 self.assertNotIn(old, text, page)
         self.assertIn('`2cfb176`', (REPO / 'docs/jnterfaces-entry.md').read_text())
 
@@ -274,7 +305,8 @@ class RustLab(unittest.TestCase):
         self.assertLess(verify.index('integration'), verify.index('test'))
         self.assertLess(verify.index('test'), verify.index('coverage-check'))
         for path in ('.agents/just/rust/steps.py', '.agents/skills/rust-profile/SKILL.md',
-                     *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'update-docs', 'prose'))):
+                     *(f'.agents/targets/rust/{name}.md'
+                       for name in ('review', 'test-review', 'update-docs', 'prose'))):
             self.assertTrue((self.app / path).is_file(), path)
         self.assertIn('/target/', (self.app / '.gitignore').read_text().splitlines())
         self.assertIn('/target/', (self.app / '.worktreedisposable').read_text().splitlines())
@@ -367,7 +399,7 @@ class RustLab(unittest.TestCase):
         self.assertIn('# Returns section', self.out(done))
         done = self.just('verify')
         self.assertNotEqual(done.returncode, 0, self.out(done))
-        self.assertIn('Recipe `api-check` failed', self.out(done))
+        self.assertRegex(self.out(done), r'(?i)recipe `api-check` failed')
         self.assertIn('app:add: no return docment', self.out(done))
 
     def test_a_project_with_no_cargo_lock_fails_the_steps_and_they_write_no_lock_file(self):
@@ -395,7 +427,8 @@ class RustLab(unittest.TestCase):
 
     def test_a_changed_file_that_the_report_leaves_out_fails_coverage_check(self):
         cases = {
-            'build.rs': ('fn main() {\n    if std::env::var("NEVER_SET_X").is_ok() {\n        println!("x");\n    }\n}\n',
+            'build.rs': ('fn main() {\n    if std::env::var("NEVER_SET_X").is_ok() {\n'
+                         '        println!("x");\n    }\n}\n',
                          None),
             'examples/demo.rs': ('fn main() {\n    println!("{}", app::add(1, 2));\n}\n', None),
             'src/orphan.rs': (EXTRA, None),
@@ -419,7 +452,8 @@ class RustLab(unittest.TestCase):
     def test_code_behind_a_feature_counts_for_coverage_and_docs(self):
         (self.dir / 'Cargo.toml').write_text(CARGO + '\n[features]\nextra = []\n')
         (self.dir / 'src/lib.rs').write_text(
-            f'{LIB}\n/// Triples a number.\n#[cfg(feature = "extra")]\npub fn triple(a: i32) -> i32 {{\n    a * 3\n}}\n')
+            f'{LIB}\n/// Triples a number.\n#[cfg(feature = "extra")]\n'
+            'pub fn triple(a: i32) -> i32 {\n    a * 3\n}\n')
         done = self.just('coverage-check')
         self.assertNotEqual(done.returncode, 0, self.out(done))
         self.assertIn('src/lib.rs', done.stdout)
@@ -529,7 +563,8 @@ class RustLab(unittest.TestCase):
         self.addCleanup(shutil.rmtree, fresh, True)
         (fresh / 'src/extra.rs').write_text(EXTRA)
         (fresh / 'src/lib.rs').write_text(f'{LIB}\n/// The module with untested code.\npub mod extra;\n')
-        (fresh / 'tests/extra.rs').write_text('#[test]\nfn double_works() {\n    assert_eq!(app::extra::double(2), 4);\n}\n')
+        (fresh / 'tests/extra.rs').write_text('#[test]\nfn double_works() {\n'
+                                              '    assert_eq!(app::extra::double(2), 4);\n}\n')
         done = self.just('coverage-check', cwd=fresh)
         self.assertEqual(done.returncode, 0, self.out(done))
         self.set_steps(fresh, drop=['integration'])
@@ -707,10 +742,13 @@ class RustLab(unittest.TestCase):
     def test_test_paths_reads_target_names_and_the_result_of_each_binary_from_cargo(self):
         manifest = (self.dir / 'Cargo.toml').read_text()
         (self.dir / 'tests/bar.rs').write_text(API_TEST)
-        (self.dir / 'tests/plain.rs').write_text('//! Fails by its exit code.\n\nfn main() {\n    std::process::exit(1);\n}\n')
+        (self.dir / 'tests/plain.rs').write_text('//! Fails by its exit code.\n\n'
+                                                 'fn main() {\n    std::process::exit(1);\n}\n')
         (self.dir / 'Cargo.toml').write_text(manifest + '\n[[test]]\nname = "foo"\npath = "tests/bar.rs"\n'
                                              '\n[[test]]\nname = "plain"\npath = "tests/plain.rs"\nharness = false\n')
-        leaks = API_TEST.replace('#[test]', '#[test]\nfn leaks() {\n    std::process::Command::new("echo").arg("     Running x").status().unwrap();\n}\n\n#[test]', 1)
+        leaks = API_TEST.replace('#[test]', '#[test]\nfn leaks() {\n'
+                                 '    std::process::Command::new("echo").arg("     Running x").status().unwrap();\n'
+                                 '}\n\n#[test]', 1)
         (self.dir / 'tests/bar.rs').write_text(leaks)
         done = self.just('test-paths', 'tests/bar.rs')
         self.assertEqual(done.returncode, 0, self.out(done))
@@ -813,7 +851,8 @@ class RustLab(unittest.TestCase):
         self.assertIn('so they do not run again', done.stdout)
         runs = [line for line in done.stdout.splitlines() if line.startswith('cargo llvm-cov test')]
         self.assertEqual(len(runs), 2, runs)
-        self.assertTrue(runs[0].endswith('--workspace --lib --lcov --output-path target/llvm-cov/test.part0.lcov'), runs)
+        self.assertTrue(runs[0].endswith('--workspace --lib --lcov --output-path target/llvm-cov/test.part0.lcov'),
+                        runs)
         self.assertTrue(runs[1].endswith('--workspace --test api --lcov --output-path '
                                          'target/llvm-cov/integration.part0.lcov'), runs)
 
@@ -828,7 +867,8 @@ class RustLab(unittest.TestCase):
         (project / 'src/gen.rs').write_text('pub fn made() -> i32 {\n    7\n}\n')
         (project / 'src/lib.rs').write_text(f'{LIB}\n/// The generated code.\npub mod gen;\n')
         (project / 'src/extra.rs').write_text(EXTRA.replace('/// Doubles a number.\n', ''))
-        (project / 'src/lib.rs').write_text(f'{LIB}\n/// The generated code.\npub mod gen;\n/// More.\npub mod extra;\n')
+        (project / 'src/lib.rs').write_text(f'{LIB}\n/// The generated code.\npub mod gen;\n'
+                                            '/// More.\npub mod extra;\n')
         done = self.just('docstring-check', cwd=project)
         self.assertEqual(done.stdout.splitlines(), ['src/extra.rs:3:1: missing documentation for a function '
                                                     '(missing_docs)'], self.out(done))

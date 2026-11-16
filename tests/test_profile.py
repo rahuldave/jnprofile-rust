@@ -71,7 +71,10 @@ class Profile(unittest.TestCase):
                     self.assertNotRegex(entry[key], r'[|&;<>$`*?(){}\\]', f'{name} {key} needs a shell')
                     self.assertEqual(shlex.join(shlex.split(entry[key])), entry[key], name)
             if 'install' in entry:
-                self.assertRegex(entry['install'], r'^(cargo \+stable install --locked \S+@\d+\.\d+\.\d+|rustup component add \S+|rustup toolchain install( (stable|nightly-\d{4}-\d{2}-\d{2}) --profile minimal)?)$')
+                self.assertRegex(entry['install'], r'^(cargo \+stable install --locked \S+@\d+\.\d+\.\d+'
+                                                   r'|rustup component add \S+'
+                                                   r'|rustup toolchain install( (stable|nightly-\d{4}-\d{2}-\d{2})'
+                                                   r' --profile minimal)?)$')
             else:
                 self.assertIn('https://rustup.rs/', entry['description'], name)
         # The programs that cannot be installed are checked first, and cargo comes before each cargo install.
@@ -181,7 +184,8 @@ class Lint(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'bad.just'
             path.write_text('a:\n    #!/usr/bin/env sh\n    true\n\nb:\n    -false\n\n[no-cd]\nc:\n    true\n\n'
-                            "set working-directory := '..'\n\n[working-directory: 'x']\nw:\n    true\n\n[script]\nd:\n    true\n\n"
+                            "set working-directory := '..'\n\n[working-directory: 'x']\nw:\n    true\n\n"
+                            '[script]\nd:\n    true\n\n'
                             'e:\n    @-false\n\nexport JLOG_RUN := env("JLOG_RUN", uuid())\nJLOG_RUN := uuid()\n'
                             'set shell := ["sh", "-cu"]\nset windows-shell := ["cmd"]\nset windows-powershell\n')
             found = lint_just.problems(path)
@@ -192,7 +196,8 @@ class Lint(unittest.TestCase):
             'a line with the prefix -, which ignores a failure',
             'an assignment of JLOG_RUN, which only the root Justfile may have',
             'an assignment of JLOG_RUN, which only the root Justfile may have',
-            'the setting shell, which only the installer may set', 'the setting shell, which only the installer may set',
+            'the setting shell, which only the installer may set',
+            'the setting shell, which only the installer may set',
             'the setting shell, which only the installer may set'])
 
 

@@ -1,0 +1,8 @@
+# The ruff settings of this repository: the rules that the python profile gives a project in its ruff.toml. The
+# folder .agents holds the code of this profile, so it is not excluded here.
+# The longest line
+line-length = 120
+
+[lint]
+# The rules that flake8 checks: pycodestyle's errors (E) and warnings (W), and pyflakes (F)
+select = ["E", "W", "F"]

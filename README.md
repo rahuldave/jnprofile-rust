@@ -56,7 +56,7 @@ for the tool `toml`. For the tool `api`, it installs the nightly toolchain
 ## The lab
 
 The lab is a test that installs the profile into a temporary Cargo project and
-runs each step. It needs a clone of jnterfaces with commit `4b9b52d`, next to
+runs each step. It needs a clone of jnterfaces with commit `338ca39`, next to
 this repository or in the folder that the variable `JNTERFACES` names. The lab
 copies jnterfaces at that commit, and leaves the clone alone. Run the lab and
 the other tests with this command:
@@ -67,6 +67,13 @@ just test
 
 `just check` runs the lint, the tests, the check of the prose and the check of
 the site.
+
+CI runs `just check` on each push and each pull request, with the workflow
+`.github/workflows/verify.yml`. It installs the programs of `profile.json` with
+their own install lines, so CI and the profile have the same pins. It clones
+jnterfaces at the commit of the lab into the folder that `SKILL_PACKAGES_DIR`
+names, and nossaifd at a fixed commit. In CI, a lab that cannot run fails, and
+does not skip.
 
 ## License
 
