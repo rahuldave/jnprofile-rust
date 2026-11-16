@@ -1,7 +1,7 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in ../jnterfaces
-next to this repository. BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39 and jlog v0.1.1. The fixed commit
+next to this repository. BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39, jlog v0.1.1 and the order of #52. The fixed commit
 keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
 as tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json
@@ -23,8 +23,9 @@ REPO = Path(__file__).resolve().parents[1]
 JNTERFACES = Path(os.environ.get('JNTERFACES', REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#47. It installs the programs of a profile (#39) and pins jlog v0.1.1 (#44).
-BASE = '7fe681106dcc1f2b2738a0abade8cba40a860dbb'
+# The merge of jnterfaces#54. It installs the programs of a profile (#39), pins jlog v0.1.1 (#44), runs integration
+# before coverage-check (#52), and runs integration once in just verify (#54).
+BASE = '4b9b52df7242ed9cc25d32c93e3119e2101a5861'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -193,7 +194,8 @@ class Pin(unittest.TestCase):
             text = (REPO / page).read_text()
             self.assertIn(f'`{BASE[:7]}`', text, page)
             # No other commit of the lab: the old pins are gone.
-            self.assertNotIn('f9e66f7', text, page)
+            for old in ('f9e66f7', '7fe6811'):
+                self.assertNotIn(old, text, page)
         self.assertIn('`2cfb176`', (REPO / 'docs/jnterfaces-entry.md').read_text())
 
 
@@ -257,8 +259,14 @@ class RustLab(unittest.TestCase):
         # The installer copies the code and tests globs of the profile into the record (jnterfaces#34 and #46).
         self.assertEqual(saved['code'], {'rust': PROFILE['code']})
         self.assertEqual(saved['tests'], {'rust': PROFILE['tests']})
-        self.assertEqual([pair.split(':')[1] for pair in saved['tools']], ['lint', 'typecheck', 'integration', 'test',
-                                                                          'docstring'])
+        # jnterfaces#52 runs integration before coverage-check, so just check reads both reports of one run.
+        self.assertLess(saved['steps'].index('integration'), saved['steps'].index('coverage-check'))
+        self.assertIn('integration', saved['provided_steps'])
+        # The order of the tools in profile.json gives the module verify integration, test, then coverage-check.
+        module = (self.app / '.agents/just/rust.just').read_text()
+        verify = next(line for line in module.splitlines() if line.startswith('verify:')).split()
+        self.assertLess(verify.index('integration'), verify.index('test'))
+        self.assertLess(verify.index('test'), verify.index('coverage-check'))
         for path in ('.agents/just/rust/steps.py', '.agents/skills/rust-profile/SKILL.md',
                      *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'docs', 'prose'))):
             self.assertTrue((self.app / path).is_file(), path)
@@ -270,6 +278,31 @@ class RustLab(unittest.TestCase):
                      'test-paths'):
             self.assertIn(step, summary)
         self.assertNotIn('api', ' '.join(summary))
+
+    def test_with_integration_only_in_verify_the_tests_of_integration_run_once_in_verify(self):
+        project = self.base / 'late'
+        (project / 'src').mkdir(parents=True)
+        (project / 'tests').mkdir()
+        self.addCleanup(shutil.rmtree, project, True)
+        for name in ('Cargo.toml', 'Cargo.lock', 'src/lib.rs', 'tests/api.rs'):
+            shutil.copy(self.fresh / name, project / name)
+        git(project, 'init', '-q')
+        done = install(self.packages, project, '--defaults', '--answer', 'integration=verify')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        saved = json.loads((project / '.agents/stack.json').read_text())
+        self.assertNotIn('integration', saved['steps'])
+        index = (project / '.agents/just/index.just').read_text()
+        self.assertIn('\nverify:\n', index)
+        block = index.split('\nverify:\n', 1)[1].split('\n\n')[0]
+        self.assertIn('rust verify', block)
+        # jnterfaces#54: the module verify runs integration, so the root verify adds no second run.
+        self.assertNotIn('integration', block)
+        commit(project, 'start')
+        done = run(['just', 'verify'], project)
+        self.assertEqual(done.returncode, 0, self.out(done))
+        runs = [line for line in done.stdout.splitlines()
+                if line.startswith('cargo llvm-cov test') and 'integration.part0.lcov' in line]
+        self.assertEqual(len(runs), 1, runs)
 
     def test_jnterfaces_has_the_entry_of_the_doc_and_the_installer_finds_every_program(self):
         stack = json.loads((self.packages / 'jnterfaces/stack.json').read_text())
