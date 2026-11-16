@@ -399,7 +399,7 @@ class RustLab(unittest.TestCase):
         self.assertIn('# Returns section', self.out(done))
         done = self.just('verify')
         self.assertNotEqual(done.returncode, 0, self.out(done))
-        self.assertIn('Recipe `api-check` failed', self.out(done))
+        self.assertRegex(self.out(done), r'(?i)recipe `api-check` failed')
         self.assertIn('app:add: no return docment', self.out(done))
 
     def test_a_project_with_no_cargo_lock_fails_the_steps_and_they_write_no_lock_file(self):
