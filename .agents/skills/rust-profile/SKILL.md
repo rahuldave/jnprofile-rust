@@ -27,9 +27,10 @@ first.
 | `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
 | `integration` | `integration` | the tests of the test targets, such as the files in `tests/` |
 | `docstring` | `docstring-check` | a doc comment on each item, public or private |
+| `api` | `api-check`, `api-prose-check` | a comment on each public item, parameter and return, for the API pages, and the prose of the changed pages |
 | `toml`, not a default tool | `toml-fmt`, `toml-check` | the format of the TOML files with taplo, and the order of the tables of `Cargo.toml` with cargo-sort |
 
-The first five tools are the default tools. `toml-check` is not a step of the commit gates, so `just verify` runs it and `just check` does not. The base adds `/target/` and
+The first six tools are the default tools. `toml-check` is not a step of the commit gates, so `just verify` runs it and `just check` does not. The base adds `/target/` and
 `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. Every
 report of a step goes to `target/`, so no step leaves a file that git sees.
 
@@ -72,6 +73,14 @@ does not.
   `-W` and `--cap-lints warn`, and reads the messages of clippy, so a
   generated file can be left out. A file that git ignores, such as code that
   `build.rs` writes into `target/`, counts as generated.
+- **`api-check`** runs `smalldocs api check` on each crate with a library or
+  a binary, or on the Rust sections of the key `api` of
+  `docs/_smalldocs.yml`. It fails on a public item with no doc comment, a
+  parameter with no comment after it or line in `# Arguments`, and a return
+  other than `()` with no `# Returns` section. Then it runs
+  `api-prose-check`, which checks the API page of each changed file with the
+  checker of nossaifd. smalldocs needs the nightly toolchain
+  `nightly-2026-11-12`, which `just install api` installs.
 - **`test-paths [PATH...]`** runs the tests of some files with `cargo test`.
   A file `tests/NAME.rs` runs the test target `NAME`. Any other file in the
   folder `tests` runs every test target of that folder. `test-parent` gives
@@ -115,7 +124,8 @@ profile reads a list of files instead:
 ## Where the files are
 
 - **`.agents/just/rust/`** holds the recipe files and `steps.py`, the helper
-  script of `coverage-check`, `docstring-check` and `test-paths`. The installer
+  script of `coverage-check`, `docstring-check`, `test-paths` and `api-check`, and
+  `api_rule.py`, the rule of the commit gate for the API files. The installer
   writes them. Do not edit them, because the next `just install` names an
   edited file and does not update it. Put your own recipes in the Justfile.
 - **`.agents/targets/rust/`** holds the Rust rules for the agentic targets

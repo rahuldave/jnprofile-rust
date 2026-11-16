@@ -24,7 +24,7 @@ def doc_entry():
     return json.loads(re.search(r'```json\n(.*?)```', doc, re.S).group(1))
 
 
-STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check']
+STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check', 'api-check']
 
 
 class Profile(unittest.TestCase):
@@ -39,8 +39,13 @@ class Profile(unittest.TestCase):
         self.assertIn('/target/', PROFILE['base']['lines']['.worktreedisposable'])
         self.assertNotIn('target/', PROFILE['base']['lines']['.gitignore'])
 
-    def test_the_default_tools_give_every_step_and_no_api_tool(self):
-        self.assertNotIn('api', PROFILE['tools'])
+    def test_the_default_tools_give_every_step_and_the_api_tool_of_python_and_typescript(self):
+        # The entry of the python and typescript profiles, with the work folder of this profile, and the nightly that
+        # smalldocs needs for rustdoc.
+        self.assertEqual(PROFILE['tools']['api'], {
+            'packages': [], 'recipes': 'api.just', 'verify': ['api-check'],
+            'lines': {'.gitignore': ['.jnprofile-rust/'], '.worktreedisposable': ['.jnprofile-rust/']},
+            'programs': ['nightly']})
         self.assertEqual(set(PROFILE['default_tools']), set(PROFILE['tools']) - {'toml'})
         verify = [step for name in PROFILE['default_tools'] for step in PROFILE['tools'][name]['verify']]
         self.assertEqual(sorted(verify), sorted(STEPS))
@@ -66,7 +71,7 @@ class Profile(unittest.TestCase):
                     self.assertNotRegex(entry[key], r'[|&;<>$`*?(){}\\]', f'{name} {key} needs a shell')
                     self.assertEqual(shlex.join(shlex.split(entry[key])), entry[key], name)
             if 'install' in entry:
-                self.assertRegex(entry['install'], r'^(cargo \+stable install --locked \S+@\d+\.\d+\.\d+|rustup component add \S+|rustup toolchain install( stable --profile minimal)?)$')
+                self.assertRegex(entry['install'], r'^(cargo \+stable install --locked \S+@\d+\.\d+\.\d+|rustup component add \S+|rustup toolchain install( (stable|nightly-\d{4}-\d{2}-\d{2}) --profile minimal)?)$')
             else:
                 self.assertIn('https://rustup.rs/', entry['description'], name)
         # The programs that cannot be installed are checked first, and cargo comes before each cargo install.
@@ -78,7 +83,8 @@ class Profile(unittest.TestCase):
         self.assertNotIn('cargo', programs)
         # cargo install builds with the toolchain of the folder, so it runs in the home folder, not under the pin.
         for name, entry in programs.items():
-            home = entry.get('install', '').startswith(('cargo +stable install', 'rustup toolchain install stable'))
+            home = entry.get('install', '').startswith(('cargo +stable install', 'rustup toolchain install stable',
+                                                        'rustup toolchain install nightly-'))
             self.assertEqual(entry.get('install_in', 'project'), 'home' if home else 'project', name)
         # cargo install builds with stable, so it needs neither a default toolchain nor the pin of the project.
         order = list(programs)

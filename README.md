@@ -8,8 +8,8 @@ brings its recipes. A recipe is a command of the project's Justfile, such as
 
 The profile gives a Cargo project the real steps of the commit gates. A step is
 one recipe that `just check` runs. The steps of the profile are `fmt-check`,
-`lint`, `typecheck`, `test`, `integration`, `coverage-check` and
-`docstring-check`. The spec
+`lint`, `typecheck`, `test`, `integration`, `coverage-check`,
+`docstring-check` and `api-check`. The spec
 of the commit gates is in [docs/spec.md](docs/spec.md).
 
 The documentation site is https://rahuldave.github.io/jnprofile-rust/. Its
@@ -38,7 +38,8 @@ The machine needs Rust from rustup, and `just`, `uv`, `git` and jlog v0.1.1
 for jnterfaces. The profile installs `rustfmt`, `clippy`,
 `llvm-tools-preview` and `cargo-llvm-cov` with `rustup component add` and
 `cargo +stable install --locked`. It installs `taplo` and `cargo-sort` the same way
-for the tool `toml`. The
+for the tool `toml`. For the tool `api`, it installs the nightly toolchain
+`nightly-2026-11-12` with `rustup toolchain install`. The
 [install table](docs/index.md#install) gives the line for each program.
 
 ## What is here
@@ -46,7 +47,7 @@ for the tool `toml`. The
 | Path | What it holds |
 |---|---|
 | `profile.json` | The profile: how to find a Rust project, its tools, its lines for `.gitignore` and `.worktreedisposable`, the `@code` globs, and the `tests` globs. |
-| `.agents/just/rust/` | One recipe file for each tool, and `steps.py`, the helper script of three steps. The installer copies the folder into the project. |
+| `.agents/just/rust/` | One recipe file for each tool, `steps.py`, the helper script of the steps, and `api_rule.py`, the rule of the commit gate for the API files. The installer copies the folder into the project. |
 | `.agents/targets/rust/` | The Rust rules for the agentic targets `review`, `test-review`, `update-docs` and `prose`. |
 | `.agents/skills/rust-profile/` | The skill that tells an agent how to use the recipes. |
 | `lab/` | The lint of the recipe files and the check of the prose. |

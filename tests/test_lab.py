@@ -33,7 +33,13 @@ WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterface
 LIB = '''//! The crate of the lab.
 
 /// Adds two numbers.
-pub fn add(a: i32, b: i32) -> i32 {
+///
+/// # Returns
+/// The sum.
+pub fn add(
+    a: i32, // the first number
+    b: i32, // the second number
+) -> i32 {
     a + b
 }
 
@@ -275,9 +281,9 @@ class RustLab(unittest.TestCase):
         self.assertIn('lint for rust needs no packages', self.installed.stderr)
         summary = self.just('--summary').stdout.split()
         for step in ('fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check',
-                     'test-paths'):
+                     'test-paths', 'api-check', 'api-prose-check'):
             self.assertIn(step, summary)
-        self.assertNotIn('api', ' '.join(summary))
+        self.assertNotIn('_api-prose-check', summary)
 
     def test_with_integration_only_in_verify_the_tests_of_integration_run_once_in_verify(self):
         project = self.base / 'late'
@@ -346,10 +352,23 @@ class RustLab(unittest.TestCase):
         self.assertTrue((target / 'Cargo.toml').is_file())
 
     def test_a_clean_project_passes_every_step_and_leaves_no_file_that_git_does_not_ignore(self):
-        for step in ('fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check', 'verify'):
+        for step in ('fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check', 'api-check',
+                     'verify'):
             done = self.just(step)
             self.assertEqual(done.returncode, 0, f'{step}:\n{self.out(done)}')
         self.assertEqual(git(self.dir, 'status', '--porcelain', '--untracked-files=all'), '')
+
+    def test_api_check_fails_on_an_item_with_no_comments_and_the_install_brings_the_rule_of_the_gate(self):
+        self.assertTrue((self.dir / '.agents/just/rust/api_rule.py').is_file())
+        (self.dir / 'src/lib.rs').write_text(LIB.replace('///\n/// # Returns\n/// The sum.\n', ''))
+        done = self.just('api-check')
+        self.assertNotEqual(done.returncode, 0, self.out(done))
+        self.assertIn('app:add: no return docment', self.out(done))
+        self.assertIn('# Returns section', self.out(done))
+        done = self.just('verify')
+        self.assertNotEqual(done.returncode, 0, self.out(done))
+        self.assertIn('Recipe `api-check` failed', self.out(done))
+        self.assertIn('app:add: no return docment', self.out(done))
 
     def test_a_project_with_no_cargo_lock_fails_the_steps_and_they_write_no_lock_file(self):
         git(self.dir, 'rm', '-q', 'Cargo.lock')

@@ -546,12 +546,12 @@ class Repository(unittest.TestCase):
         self.assertTrue(self.is_fresh('run-a'))
         out = self.run_tests('run-a', step='integration',
                              change=lambda: (self.root / 'src/lib.rs').write_text('pub fn x() {}\n'))
-        self.assertIn('integration: a file changed while the tests ran', out)
+        self.assertIn('integration: a file changed during the run', out)
 
     def test_a_file_changed_while_the_tests_run_drops_the_run(self):
         self.commit_one()
         out = self.run_tests('run-a', change=lambda: (self.root / 'src/lib.rs').write_text('pub fn x() {}\n'))
-        self.assertIn('a file changed while the tests ran', out)
+        self.assertIn('a file changed during the run', out)
         self.assertFalse(steps.saved_run('test').exists())
         self.assertFalse(self.is_fresh('run-a'))
 
