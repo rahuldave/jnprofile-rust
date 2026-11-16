@@ -19,7 +19,8 @@ The rule is the rule of api-check, in steps.py and smalldocs, which runs rustdoc
 - Only a Rust file counts.
 
 is_api is False for each path in a project without the api tool or without the docs role, as .agents/stack.json
-records them. It is False too when a setting cannot be read, so a broken config never stops the gate.
+records them. When the rule cannot read the api settings, it is True for each Rust file outside the folders of the
+tools and .agents/generated.txt, as the rules of the python and typescript profiles, so the gate stays on.
 
 The file stands alone: it needs Python 3.9 or later and its standard library only, and no YAML library, so it reads
 the key api with a small reader of its own, the reader of the python profile. It writes nothing. Its paths are
@@ -39,22 +40,47 @@ ROOT_MARKS = ('Cargo.toml', 'package.json', '.git')
 
 
 def is_api(path):
-    """True when PATH, relative to the top of the repository, is a source file of the API pages. False on any error."""
+    """True when PATH, relative to the top of the repository, is a source file of the API pages.
+
+    Without the api tool or the docs role, it is False. When the rule cannot read the api settings, it is True for
+    each Rust file outside the folders of the tools and .agents/generated.txt, so that the gate asks for a record
+    rather than let a change of the API pages through without notice. It never raises.
+    """
     try:
-        return api_on() and in_api(path)
-    except Exception:  # noqa: BLE001 - a setting that cannot be read gives False, so the gate never stops on it
+        path = clean(path)
+        if not path or not path.endswith('.rs') or not api_on():
+            return False
+    except Exception:  # noqa: BLE001 - a path or a record that cannot be read gives no page of the API
         return False
+    try:
+        return in_api(path)
+    except Exception:  # noqa: BLE001 - settings that cannot be read count each Rust file, so the gate stays on
+        return fail_closed(path)
+
+
+def fail_closed(path):
+    """is_api when the settings cannot be read: True for a Rust file outside the tools and generated.txt."""
+    if path.startswith(TOOL_FOLDERS):
+        return False
+    try:
+        return not generated(path)
+    except Exception:  # noqa: BLE001 - a list that cannot be read exempts nothing
+        return True
 
 
 def in_api(path):
     """True when PATH is a source file of the API pages, whether or not the project has the api tool. steps.py takes
-    the changed files of api-prose-check by it. It may raise on a setting that cannot be read."""
+    the changed files of api-prose-check by it. It raises on api settings that it cannot read: a form of YAML out of
+    its scope, an empty key api, a path out of the repository, or a manifest that is no file."""
     path = clean(path)
     if not path or not path.endswith('.rs') or excluded(path):
         return False
     text = read(DOCS_CONFIG)
     if text is not None and re.search(r'^api\s*:', text, re.MULTILINE):
-        crates = section_crates(api_sections(text))
+        sections = api_sections(text)
+        if not sections:
+            raise ValueError('the key api is empty')
+        crates = section_crates(sections)
         # As api_settings of steps.py: settings with no Rust section leave the crates of the workspace.
         if crates:
             return any(in_crate(path, crate) for crate in crates)
@@ -208,6 +234,8 @@ def section_crates(sections):
             continue
         manifest = section.get('manifest')
         if manifest:
+            if not os.path.isfile(inside(str(manifest))):
+                raise ValueError(f'the manifest {manifest} of the api settings is no file')
             crates.append(os.path.dirname(inside(str(manifest))))
             continue
         at_docs = any(os.path.exists(os.path.join('docs', mark)) for mark in ROOT_MARKS)
