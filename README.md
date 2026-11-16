@@ -33,7 +33,7 @@ just uninstall docstring
 just install docstring
 ```
 
-The machine needs Rust from rustup, and `just`, `uv`, `git` and jlog v0.1.0
+The machine needs Rust from rustup, and `just`, `uv`, `git` and jlog v0.1.1
 for jnterfaces. The profile installs `rustfmt`, `clippy`,
 `llvm-tools-preview` and `cargo-llvm-cov` with `rustup component add` and
 `cargo +stable install --locked`. It installs `taplo` and `cargo-sort` the same way
@@ -54,7 +54,7 @@ for the tool `toml`. The
 ## The lab
 
 The lab is a test that installs the profile into a temporary Cargo project and
-runs each step. It needs a clone of jnterfaces with commit `f9e66f7`, next to
+runs each step. It needs a clone of jnterfaces with commit `7fe6811`, next to
 this repository or in the folder that the variable `JNTERFACES` names. The lab
 copies jnterfaces at that commit, and leaves the clone alone. Run the lab and
 the other tests with this command:
