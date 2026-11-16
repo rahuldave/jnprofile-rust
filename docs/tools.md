@@ -101,7 +101,9 @@ The exit code of `test-paths` tells `test-parent` what happened. Each profile gi
 - **0** means the tests ran and passed.
 - **1** means a test failed or did not build. A new test of new code often does not build on the parent, and that is a failure of the test.
 - **5** means no test ran. The files may hold only code and no test file, the test targets may hold no test, or the folder `tests` may have no test target. A test with `#[ignore]` does not run, so it does not count. With no path, `test-paths` runs no test and exits with 5. pytest gives the same code when it collects no test.
-- **2** means cargo itself failed, for example on a stale `Cargo.lock` or on a path that it cannot run.
+- **2** means the run itself failed. cargo may fail, for example on a stale `Cargo.lock` or on a path that it cannot run. Or a test may end the run, as with `std::process::exit` in a test, before its binary gives a result.
+
+`test-paths` runs the tests of each package, and then gives one code. A failed test in any package gives 1, even when another package's run ended early.
 
 A dependency whose build script fails for an outside reason, such as a missing system library, gives 1, not 2. cargo prints the same lines as for a test that does not build. The spec lists this as a limit of the Rust profile.
 
@@ -109,7 +111,9 @@ cargo exits with 101 both when a test fails or does not build and when it fails 
 
 `test-paths` reads the output of cargo to count the tests that ran. So it runs cargo with no colors and with neither quiet nor verbose output, whatever the settings of `CARGO_TERM_COLOR`, `CARGO_TERM_QUIET` and `CARGO_TERM_VERBOSE`. A target with `harness = false` prints no count, so its run counts as a test that ran.
 
-`test-paths` reads the name of each test target from `cargo metadata`. So a `[[test]]` with a name other than its file still runs. A file in `tests` that is no test target, as with `autotests = false`, does not run, and `test-paths` says so. A test binary that names its tests and then stops with no result, as on `std::process::exit(0)` in a test, counts as a failure.
+`test-paths` reads the name of each test target from `cargo metadata`. So a `[[test]]` with a name other than its file still runs. A file in `tests` that is no test target, as with `autotests = false`, does not run, and `test-paths` says so.
+
+A test binary that names its tests and then stops with no result ends the run early. That happens on `std::process::exit(0)` or `std::process::exit(1)` in a test. `test-paths` then gives 2, as the spec says for every language, and not 1. A test that libtest names as failed before the stop still gives 1. A stop also ends the rest of the run of its package, so a test that would fail in a later binary of that package does not run.
 
 The key `tests` of `profile.json` names `tests/**`, the folder `tests` at the top of the project. A glob cannot name only the folder `tests` of each package of a workspace, because `**/tests/**` also takes a module such as `src/x/tests/mod.rs`, whose new code would reach the parent. So the tests of a member package are not copied to the parent, and `test-review` judges them from the diff.
 

@@ -42,6 +42,8 @@ ANNOUNCED = re.compile(r'^running (\d+) tests?$', re.M)
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 # The seconds with no new line, once the command ends, after which the copy of its output stops.
 LINGER = 2
+# The line of libtest for a test that failed, also a #[should_panic] test, whose name ends in - should panic.
+FAILED_TEST = re.compile(r'^test .+ \.\.\. FAILED$', re.M)
 # The summary line of each test binary: the numbers of the passed and of the failed tests.
 TEST_RESULT = re.compile(r'^test result: \w+\. (\d+) passed; (\d+) failed;', re.M)
 GENERATED = '.agents/generated.txt'
@@ -606,6 +608,9 @@ def test_paths(paths):
 
     PASSED (0) when the tests ran and passed, FAILED (1) when a test failed or did not build, NO_TEST (5) when no
     test ran, and RUNNER (2) when cargo itself failed, for example on a stale Cargo.lock or a path it cannot run.
+    A test binary that announced its tests and stopped with no result, as on std::process::exit in a test, ended
+    the run, and gives RUNNER too. Each command runs, one for each package, and a failed test in any of them wins
+    over a run that ended or a cargo that failed.
     """
     try:
         commands, skipped = test_commands(paths)
@@ -617,24 +622,35 @@ def test_paths(paths):
     if not commands:
         print('test-paths: no file in the folder tests of a package, so no test ran', flush=True)
         return NO_TEST
-    ran = 0
+    ran, codes = 0, set()
     for command in commands:
         print(shlex.join(command), flush=True)
         code, out = run_streamed(command)
         if code and NO_TARGET.search(out) and not RUNNING.search(out) and not BROKE.search(out):
             print('test-paths: no test target in the folder tests, so no test ran', flush=True)
             continue
-        if code:
-            return outcome(code, out)
+        stopped = False
         for binary in RUNNING.split(out)[1:]:
             results = TEST_RESULT.findall(binary)
             if results:
                 ran += sum(int(a) + int(b) for a, b in results)
+            elif FAILED_TEST.search(binary):
+                # libtest named a failed test, and then the binary stopped: the failure counts.
+                codes.add(FAILED)
             elif any(int(n) for n in ANNOUNCED.findall(binary)):
-                print('test-paths: a test binary stopped before it gave its result', flush=True)
-                return FAILED
+                # The run ended, as on std::process::exit in a test, and no test result says why. The spec gives
+                # that the code of a runner that failed, so test-review does not read it as a failed test.
+                print('test-paths: a test binary stopped before it gave its result, so the run ended early',
+                      flush=True)
+                stopped = True
+                codes.add(RUNNER)
             else:
                 ran += 1
+        if code and not stopped:
+            codes.add(outcome(code, out))
+    for result in (FAILED, RUNNER):
+        if result in codes:
+            return result
     if not ran:
         print('test-paths: the test targets hold no test that is not ignored, so no test ran', flush=True)
         return NO_TEST

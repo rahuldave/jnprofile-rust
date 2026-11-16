@@ -617,14 +617,40 @@ class Repository(unittest.TestCase):
             # cargo passes on the code of a test binary that exits by itself, so the output decides.
             (5, fail, 1), (1, fail, 1), (-9, fail, 1), (256, fail, 1),
             (5, '', 2), (1, '', 2), (-9, '', 2), (256, '', 2),
-            # A binary that announced its tests and stopped with no result, as on exit(0) in a test.
-            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\n', 1),
+            # A binary that announced its tests and stopped with no result, as on exit(0) in a test: the run ended.
+            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\n', 2),
+            # libtest named a failed test before the binary stopped, so the failure counts.
+            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\ntest a_fails ... FAILED\n', 1),
+            # A #[should_panic] test that did not panic, then a stop: the failure counts.
+            (0, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\n'
+                'test a_no_panic - should panic ... FAILED\n', 1),
+            # exit(1) in a test: cargo says the test failed, but the binary gave no result, so the run ended.
+            (101, '     Running tests/api.rs (target/debug/deps/api-1)\nrunning 2 tests\ntest a ... ok\n'
+                  'error: test failed, to rerun pass `--test api`\n', 2),
+            # A binary with harness = false announces no tests, so its exit code of 1 is a failed test.
+            (101, '     Running tests/plain.rs (target/debug/deps/plain-1)\n'
+                  'error: test failed, to rerun pass `--test plain`\n', 1),
         )
         for got, out, want in cases:
             with self.subTest(got=got, out=out), \
                     mock.patch.object(steps, 'run_streamed', return_value=(got, out)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(steps.test_paths(['tests/api.rs']), want)
+
+    def test_test_paths_runs_every_package_and_a_failed_test_wins_in_any_order(self):
+        stopped = (0, '     Running tests/q.rs (target/debug/deps/q-1)\nrunning 1 test\n')
+        fail = (101, '     Running tests/f.rs (target/debug/deps/f-1)\nrunning 1 test\ntest f ... FAILED\n\n'
+                     'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n'
+                     'error: test failed, to rerun pass `--test f`\n')
+        broken = (101, 'error: the lock file Cargo.lock needs to be updated but --locked was passed\n')
+        two = ([['cargo', 'test', '-p', 'a'], ['cargo', 'test', '-p', 'b']], [])
+        for outs, want in (([stopped, fail], 1), ([fail, stopped], 1), ([stopped, (0, PASSED)], 2),
+                           ([(0, PASSED), broken], 2), ([broken, fail], 1)):
+            with self.subTest(outs=outs), mock.patch.object(steps, 'test_commands', return_value=two), \
+                    mock.patch.object(steps, 'run_streamed', side_effect=outs) as ran, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.test_paths(['x']), want)
+                self.assertEqual(ran.call_count, 2)
 
     def test_test_paths_with_no_path_runs_no_test_and_gives_5(self):
         with mock.patch.object(steps, 'run_streamed') as run, contextlib.redirect_stdout(io.StringIO()):
