@@ -64,7 +64,8 @@ class Rule(Folder):
         self.write('.agents/stack.json', json.dumps({'tools': list(tools), 'choices': {'docs': docs}}))
 
     def is_api(self, *paths):
-        script = (f'import importlib.util, json, sys\nspec = importlib.util.spec_from_file_location("r", {str(RULE)!r})\n'
+        script = ('import importlib.util, json, sys\n'
+                  f'spec = importlib.util.spec_from_file_location("r", {str(RULE)!r})\n'
                   'r = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(r)\n'
                   'print(json.dumps([r.is_api(p) for p in sys.argv[1:]]))')
         done = subprocess.run([sys.executable, '-I', '-B', '-c', script, *paths], cwd=self.root, capture_output=True,
@@ -491,7 +492,8 @@ class Smalldocs(Folder):
         self.write(str(steps.PROSE_GATE), 'import subprocess\n'
                    'def ci_set():\n    return False\n'
                    'def base_commit(top, ref):\n'
-                   '    out = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=top, capture_output=True, text=True)\n'
+                   '    out = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=top, capture_output=True,\n'
+                   '                         text=True)\n'
                    '    return out.stdout.strip(), ref\n')
         git(self.root, 'branch', 'main')
         self.write('src/lib.rs', self.DOCUMENTED.replace('It adds.', 'It adds, BAD.'))

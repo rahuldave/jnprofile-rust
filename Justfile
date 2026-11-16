@@ -13,14 +13,19 @@ python := "uv run --no-project --quiet --python '>=3.11' --with tomlkit==0.15.2 
 # The checker of the nossaifd writing guide. Set NOSSAIFD_CHECK to use another copy
 checker := env("NOSSAIFD_CHECK", home_directory() / "Projects/nossaifd/check.py")
 
-# Check the JSON, the Python, and the recipe files of the profile: no shebang, no - line, no [no-cd], and they parse
+# ruff, at a fixed version, lints the Python scripts and tests
+ruff := "uvx --quiet ruff@0.17.5"
+
+# Check the JSON, the Python with ruff, and the recipe files of the profile: no shebang, no - line, no [no-cd], and they parse
 lint:
+    {{ruff}} check .
     {{python}} -m json.tool profile.json > /dev/null
     {{python}} -m json.tool skill-package.json > /dev/null
-    {{python}} -m py_compile .agents/just/rust/steps.py lab/lint_just.py tests/test_lab.py tests/test_steps.py tests/test_profile.py
+    {{python}} -m py_compile .agents/just/rust/steps.py .agents/just/rust/api_rule.py lab/lint_just.py lab/prose_check.py lab/ci_programs.py tests/test_lab.py tests/test_steps.py tests/test_profile.py tests/test_api.py
     {{python}} lab/lint_just.py .agents/just/rust
 
-# Run the tests and the lab. Extra arguments go to unittest: just test tests.test_steps. JNTERFACES names jnterfaces
+# Run the tests and the lab. Extra arguments go to unittest: just test tests.test_steps. JNTERFACES names jnterfaces, else
+# SKILL_PACKAGES_DIR/jnterfaces, else ../jnterfaces
 test *args:
     {{python}} -m unittest {{ if args == "" { "discover -s tests -t ." } else { "" } }} "$@"
 
@@ -32,7 +37,7 @@ prose-check:
 check: lint test prose-check docs-check
 
 # The documentation site, from docs/, with smalldocs.
-smalldocs := "uvx --quiet smalldocs@0.5.5"
+smalldocs := "uvx --quiet smalldocs@0.5.12"
 
 # Check the site: broken links, and options that smalldocs ignores
 docs-check:

@@ -5,17 +5,17 @@ A change to such a file, such as a doc comment of a public function, then needs 
 
 The rule is the rule of api-check, in steps.py and smalldocs, which runs rustdoc on each crate:
 
-- With the key api in docs/_smalldocs.yml and a section with language: rust, each such section names a crate by its manifest, a
-  Cargo.toml from docs/. With no manifest, the crate is the Cargo.toml of root, which smalldocs reads as a folder
-  from docs/.
-- Without the key api, or with no Rust section in it, the crates are the folders with a Cargo.toml, as cargo metadata finds the packages of the
-  workspace.
-- rustdoc reads the files of the library of a crate: src/lib.rs and the modules under src/. A crate with only a
-  binary has no library, so smalldocs documents the binary: src/main.rs and the modules under src/. The binaries in
-  src/bin/, the tests, the examples, the benches and build.rs are outside the pages. A crate with neither file has
-  its binaries in src/bin/, and smalldocs documents one of them, so each file under src/ counts. A library at another path, with
-  path in [lib] of Cargo.toml, does not count: the rule reads no TOML. A file of the tools or of
-  .agents/generated.txt does not count.
+- With the key api in docs/_smalldocs.yml and a section with language: rust, each such section names a crate by its
+  manifest, a Cargo.toml from docs/. With no manifest, the crate is the Cargo.toml of root, which smalldocs reads as a
+  folder from docs/.
+- Without the key api, or with no Rust section in it, the crates are the folders with a Cargo.toml, as cargo metadata
+  finds the packages of the workspace.
+- rustdoc reads the files of the library of a crate: src/lib.rs and the modules under src/. A crate with only a binary
+  has no library, so smalldocs documents the binary: src/main.rs and the modules under src/. The binaries in src/bin/,
+  the tests, the examples, the benches and build.rs are outside the pages. A crate with neither file has its binaries in
+  src/bin/, and smalldocs documents one of them, so each file under src/ counts. A library at another path, with path in
+  [lib] of Cargo.toml, does not count: the rule reads no TOML. A file of the tools or of .agents/generated.txt does not
+  count.
 - Only a Rust file counts.
 
 is_api is False for each path in a project without the api tool or without the docs role, as .agents/stack.json

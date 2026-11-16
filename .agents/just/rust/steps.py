@@ -8,10 +8,10 @@ run ID JLOG_RUN of the root Justfile and the worktree tree tie each report to it
 report only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also needs
 diff-cover, which it runs with uv.
 
-The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through
-git show HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent without the file, the list is empty. git matches
-their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top of
-the project, which can be a subfolder of the git repository.
+The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through git show
+HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent without the file, the list is empty.
+git matches their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top
+of the project, which can be a subfolder of the git repository.
 """
 import importlib.util
 import json
@@ -163,10 +163,11 @@ def ignored(path):
 def worktree_tree():
     """The tree hash of every file of the worktree, staged or not, that git does not ignore, or None on an error.
 
-    It starts from HEAD in a temporary index of its own, so neither the real index nor a second run at the same
-    time changes. The tree only ties a report to its run: steps.py compares it with its own trees, never with
-    the tree of jlog or jagt, which start from a copy of the index. The folders target and .jnprofile-rust of the project never count. A file that git cannot
-    index, such as a nested repository with no commit, gives None, and git's message goes to the error output.
+    It starts from HEAD in a temporary index of its own, so neither the real index nor a second run at the same time
+    changes. The tree only ties a report to its run: steps.py compares it with its own trees, never with the tree of
+    jlog or jagt, which start from a copy of the index. The folders target and .jnprofile-rust of the project never
+    count. A file that git cannot index, such as a nested repository with no commit, gives None, and git's message goes
+    to the error output.
     """
     WORK.mkdir(parents=True, exist_ok=True)
     handle, name = tempfile.mkstemp(dir=WORK, suffix='.index')
@@ -417,8 +418,8 @@ def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
     Each selection of targets runs in its own cargo llvm-cov, with a report of its own, and the step merges them.
-    When ARGS select targets or packages, such as --test api or -p core, they take the place of the selections. With no target for
-    STEP, no test runs and the report is empty. Returns the exit code of the first cargo that fails.
+    When ARGS select targets or packages, such as --test api or -p core, they take the place of the selections. With no
+    target for STEP, no test runs and the report is empty. Returns the exit code of the first cargo that fails.
     """
     out = report(step)
     out.unlink(missing_ok=True)
@@ -912,7 +913,8 @@ def api_files(paths):
     """
     # The import would write __pycache__ into the installed folder of the profile.
     sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location('jnprofile_rust_api_rule', Path(__file__).resolve().parent / 'api_rule.py')
+    spec = importlib.util.spec_from_file_location('jnprofile_rust_api_rule',
+                                                  Path(__file__).resolve().parent / 'api_rule.py')
     rule = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rule)
     excluded = matcher(parent_list(GENERATED))
@@ -939,8 +941,8 @@ def api(action, option=None):
     check the API page of each changed file with the checker of nossaifd. A changed file changed since HEAD, or
     since the base of prose_base, from OPTION, the value of --base, or from CI. Returns the exit code."""
     if action == 'prose' and not PROSE_CHECKER.is_file():
-        print(f'api-prose-check: no checker of nossaifd at {PROSE_CHECKER}, so the API pages are not checked. The prose '
-              f'role installs it')
+        print(f'api-prose-check: no checker of nossaifd at {PROSE_CHECKER}, so the API pages are not checked. The '
+              'prose role installs it')
         return 0
     base = about_base = None
     if action == 'prose':

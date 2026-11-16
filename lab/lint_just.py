@@ -23,8 +23,10 @@ RULES = [
     (re.compile(r'^\s*\[[^\]]*\bno-cd\b'), 'the [no-cd] attribute'),
     (re.compile(r'^\s*\[[^\]]*\bworking-directory\b'), 'the [working-directory] attribute'),
     (re.compile(r'^\s*(export\s+)?JLOG_RUN\s*:='), 'an assignment of JLOG_RUN, which only the root Justfile may have'),
-    (re.compile(r'^\s*set\s+(windows-shell|windows-powershell|shell)\b'), 'the setting shell, which only the installer may set'),
-    (re.compile(r'^\s*set\s+working-directory'), 'the setting working-directory, which only the module of the installer may have'),
+    (re.compile(r'^\s*set\s+(windows-shell|windows-powershell|shell)\b'),
+     'the setting shell, which only the installer may set'),
+    (re.compile(r'^\s*set\s+working-directory'),
+     'the setting working-directory, which only the module of the installer may have'),
 ]
 
 

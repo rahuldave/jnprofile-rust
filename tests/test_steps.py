@@ -606,7 +606,8 @@ class Repository(unittest.TestCase):
     def test_test_paths_gives_1_for_a_failed_test_or_build_and_2_when_cargo_itself_fails(self):
         (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
         self.files('tests/api.rs')
-        fail = PASSED.replace('ok. 1 passed; 0', 'FAILED. 0 passed; 1') + 'error: test failed, to rerun pass `--test api`\n'
+        fail = (PASSED.replace('ok. 1 passed; 0', 'FAILED. 0 passed; 1')
+                + 'error: test failed, to rerun pass `--test api`\n')
         cases = (
             (0, PASSED, 0),
             (101, fail, 1),
@@ -664,7 +665,8 @@ class Repository(unittest.TestCase):
         out = io.StringIO()
         with mock.patch.object(steps, 'target_names', return_value=names), contextlib.redirect_stdout(out):
             commands, skipped = steps.test_commands(['tests/bar.rs', 'tests/loose.rs'])
-        self.assertEqual(commands, [['cargo', 'test', '--locked', '--all-features', '--package', 'app', '--test', 'foo']])
+        self.assertEqual(commands,
+                         [['cargo', 'test', '--locked', '--all-features', '--package', 'app', '--test', 'foo']])
         self.assertEqual(skipped, [])
         self.assertIn('skips tests/loose.rs, which is no test target of its package', out.getvalue())
         with mock.patch.object(steps, 'target_names', return_value={}), contextlib.redirect_stdout(io.StringIO()):

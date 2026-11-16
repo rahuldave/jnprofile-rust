@@ -19,7 +19,8 @@ def body(text):
 
 
 def main(argv):
-    """Check each page of ARGV[1:] with the checker ARGV[0], and return 1 when a page fails or the checker is missing."""
+    """Check each page of ARGV[1:] with the checker ARGV[0], and return 1 when a page fails or the checker is
+    missing."""
     checker, pages = Path(argv[0]).expanduser(), argv[1:]
     if not checker.is_file():
         print(f'prose-check: no checker at {checker}. Clone https://github.com/rahuldave/nossaifd, or set '
