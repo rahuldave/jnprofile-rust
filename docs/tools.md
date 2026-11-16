@@ -150,7 +150,7 @@ When `docs/_smalldocs.yml` has the key `api` with a section that says `language:
 
 The run files of `api-prose-check` go into `.jnprofile-rust/`, as those of the Python and TypeScript profiles go into `.jnprofile-python/` and `.jnprofile-typescript/`. The tool adds the folder to `.gitignore` and `.worktreedisposable`.
 
-`.agents/just/rust/api_rule.py` holds the rule of the commit gate for the API files. Its function `is_api(path)` is true for a file that rustdoc reads for the pages. It is false in a project without the tool `api` or without the docs role, as `.agents/stack.json` records them. It is false too when a setting cannot be read, so the gate never stops on it.
+`.agents/just/rust/api_rule.py` holds the rule of the commit gate for the API files. Its function `is_api(path)` is true for a file that rustdoc reads for the pages. It is false in a project without the tool `api` or without the docs role, as `.agents/stack.json` records them. When the rule cannot read the api settings, such as a key `api` written on one line, it is true for each Rust file outside the folders of the tools and `.agents/generated.txt`. So the gate stays on, as with the rules of the Python and TypeScript profiles.
 
 With the key `api` in `docs/_smalldocs.yml`, the crates are those of its Rust sections. A `manifest` names a crate from `docs/`, and a section with no `manifest` takes the `Cargo.toml` of its root, as smalldocs does. Without the key, the crate of a file is the nearest folder above it with a `Cargo.toml`.
 

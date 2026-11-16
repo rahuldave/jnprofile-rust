@@ -921,12 +921,14 @@ def api_files(paths):
     except Exception as exc:  # noqa: BLE001 - the rule raises on settings that it cannot read
         # The rule reads the key api only in the form of a block. The changed files of each crate count then, so no
         # page is left out.
-        print(f'api-prose-check: api_rule.py cannot read the key api of {DOCS_CONFIG}: {exc}. So the changed files of '
-              'each crate count', file=sys.stderr)
+        print(f'api-prose-check: api_rule.py cannot read the key api of {DOCS_CONFIG} or {GENERATED}: {exc}. So the '
+              'changed files of each crate count', file=sys.stderr)
         found = []
         for path in paths:
             clean = rule.clean(path)
-            crate = rule.crate_of(clean) if clean.endswith('.rs') and not rule.excluded(clean) else None
+            # Not rule.excluded, which raises on a pattern of generated.txt that it cannot read: the matcher of git
+            # above leaves out the generated files of the parent commit.
+            crate = rule.crate_of(clean) if clean.endswith('.rs') and not clean.startswith(rule.TOOL_FOLDERS) else None
             if crate is not None and not excluded(path) and rule.in_crate(clean, crate):
                 found.append(path)
         return found

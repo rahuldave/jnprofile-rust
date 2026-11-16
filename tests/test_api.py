@@ -169,12 +169,23 @@ class Rule(Folder):
         self.write('docs/_smalldocs.yml', 'api:\n  language: rust\n')
         self.assertEqual(self.is_api('src/lib.rs', 'docs/src/lib.rs'), {'src/lib.rs': False, 'docs/src/lib.rs': True})
 
-    def test_settings_that_cannot_be_read_or_point_out_of_the_repository_give_false(self):
+    def test_settings_that_cannot_be_read_count_each_rust_file_so_the_gate_stays_on(self):
         self.crate()
-        for text in ('api: {language: rust}\n', 'api:\n  language: "rust\n', 'api:\n  - language: rust\n'
-                     '    manifest: ../../Cargo.toml\n', 'api:\n  language: rust\n  root: ../..\n'):
+        self.write('.agents/generated.txt', 'src/gen.rs\n')
+        paths = ('src/lib.rs', 'tests/t.rs', 'build.rs', 'src/gen.rs', '.agents/x.rs', 'Cargo.toml', '../x.rs')
+        for text in ('api: {language: rust, manifest: ../Cargo.toml}\n', 'api:\n  language: "rust\n',
+                     'api:\n  - language: rust\n    manifest: ../../Cargo.toml\n',
+                     'api:\n  language: rust\n  root: ../..\n', 'api:\n', 'api:\n# nothing\nproject:\n  title: x\n',
+                     'api:\n  language: rust\n  manifest: ../nope/Cargo.toml\n'):
             self.write('docs/_smalldocs.yml', text)
+            self.assertEqual(self.is_api(*paths), {
+                'src/lib.rs': True, 'tests/t.rs': True, 'build.rs': True, 'src/gen.rs': False, '.agents/x.rs': False,
+                'Cargo.toml': False, '../x.rs': False}, text)
+            self.stack(('rust:api',), False)
             self.assertFalse(self.is_api('src/lib.rs')['src/lib.rs'], text)
+            self.stack(('rust:lint',), True)
+            self.assertFalse(self.is_api('src/lib.rs')['src/lib.rs'], text)
+            self.stack()
 
     def test_a_crate_inside_another_crate_keeps_its_own_files(self):
         self.crate()
@@ -362,6 +373,15 @@ class Parts(Folder):
         with contextlib.redirect_stderr(err):
             self.assertEqual(steps.api_files(['src/lib.rs', 'tests/t.rs', 'src/bin/x.rs']), ['src/lib.rs'])
         self.assertIn('api_rule.py cannot read the key api', err.getvalue())
+
+    def test_a_pattern_of_generated_txt_that_the_rule_cannot_read_does_not_stop_prose(self):
+        self.crate()
+        self.write('.agents/generated.txt', '[z-a].rs\n')
+        self.write('docs/_smalldocs.yml', 'api:\n  language: rust\n')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(steps.api_files(['src/lib.rs', 'tests/t.rs']), ['src/lib.rs'])
+        self.assertIn('api_rule.py cannot read', err.getvalue())
 
     def test_the_api_files_write_no_bytecode_into_the_folder_of_the_profile(self):
         folder = self.root / '.agents/just/rust'
