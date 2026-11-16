@@ -127,6 +127,35 @@ The step runs `cargo clippy` with the lints `missing_docs` and `clippy::missing_
 
 The step also passes `--cap-lints warn`. So a crate that sets `#![deny(missing_docs)]` still gets the list of items, and a generated file in such a crate still passes. An item in a file that git ignores, such as code that `build.rs` writes into `target/`, counts as generated. An `#[allow(missing_docs)]` in the code wins over the lints of the command line, so it hides its items from the step. The `review` target checks each new `#[allow]`. Each line of its output has the form `src/lib.rs:18:4: missing documentation for a function`.
 
+## api
+
+| Recipe | What it does |
+|---|---|
+| `just api-check` | Fails on each public item, parameter and return with no comment for the API pages, then runs `api-prose-check` |
+| `just api-prose-check [--base REF]` | Checks the API page of each changed file with the checker of nossaifd |
+
+The recipes have the names and the form of the `api` tools of the Python and TypeScript profiles. The step `docs-check` of the docs role runs `api-check`, and so does `just verify`.
+
+`api-check` runs `smalldocs api check` of smalldocs 0.5.12 with `uv`. smalldocs reads the API with `cargo +nightly-2026-11-12 rustdoc`, which writes the JSON format 61. smalldocs reads only the formats 57 and 61, so the profile pins the date. The program `nightly` of the tool installs that toolchain with `rustup toolchain install nightly-2026-11-12 --profile minimal`. Its check is `rustup run nightly-2026-11-12 rustc --version`, which never downloads a toolchain. `rustup toolchain list` and `rustup show active-toolchain` would install a missing pin of the project.
+
+The step fails on three things:
+
+- A public item with no doc comment.
+- A parameter with no comment after it on its line, and no line in an `# Arguments` section.
+- A return other than `()` with no `# Returns` section.
+
+When `docs/_smalldocs.yml` has the key `api` with a section that says `language: rust`, the step checks only those sections. A section with no `toolchain` gets the pin. Otherwise the step checks each package of the workspace that has a library or a binary. A crate with only a binary gets the pages of its private items, as smalldocs does.
+
+`api-prose-check` builds the API pages into a temporary folder, outside the project. It then runs the checker of nossaifd on the page of each changed API file and on the module comment of that file, the `//!` lines at its top. A changed file changed since `HEAD`. In CI, or with `--base REF`, it changed since the base that `check-changed` of nossaifd takes. Without the prose role, which installs the checker, the step passes. A run that passed is not run again in the same run of `just`, on the same tree and with the same base.
+
+The run files of `api-prose-check` go into `.jnprofile-rust/`, as those of the Python and TypeScript profiles go into `.jnprofile-python/` and `.jnprofile-typescript/`. The tool adds the folder to `.gitignore` and `.worktreedisposable`.
+
+`.agents/just/rust/api_rule.py` holds the rule of the commit gate for the API files. Its function `is_api(path)` is true for a file that rustdoc reads for the pages. It is false in a project without the tool `api` or without the docs role, as `.agents/stack.json` records them. It is false too when a setting cannot be read, so the gate never stops on it.
+
+With the key `api` in `docs/_smalldocs.yml`, the crates are those of its Rust sections. A `manifest` names a crate from `docs/`, and a section with no `manifest` takes the `Cargo.toml` of its root, as smalldocs does. Without the key, the crate of a file is the nearest folder above it with a `Cargo.toml`.
+
+In a crate with a library, the files are `src/lib.rs` and the modules under `src/`. In a crate with only a binary, they are `src/main.rs` and its modules. The binaries in `src/bin/`, the tests, the examples, `build.rs` and the files of `.agents/generated.txt` are not API files. The rule reads no TOML, so a library at another path, with `path` in `[lib]`, does not count. `api-prose-check` takes its changed files by the same rule, without the check of the tool and the role.
+
 ## Lines that no test can run
 
 Stable Rust has no pragma that leaves out one line from the coverage. So the profile reads two lists of files:
@@ -140,4 +169,4 @@ The steps read both lists from the parent commit, with `git show HEAD:./PATH`, w
 
 ## The helper script
 
-The recipes of `coverage-check`, `docstring-check` and `test-paths` run `.agents/just/rust/steps.py` with `uv`. The script needs Python 3.11 or later and no package. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in `target/jnprofile-rust/`. It also reads the JSON messages of clippy, and prints each item with no doc. `coverage-check` runs `diff-cover` 11.0.1 with `uv run --with`.
+The recipes of `coverage-check`, `docstring-check`, `test-paths` and `api-check` run `.agents/just/rust/steps.py` with `uv`. The script needs Python 3.11 or later and no package. The api commands run it again under smalldocs, whose PyYAML reads `docs/_smalldocs.yml`. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in `target/jnprofile-rust/`. It also reads the JSON messages of clippy, and prints each item with no doc. `coverage-check` runs `diff-cover` 11.0.1 with `uv run --with`.

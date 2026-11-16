@@ -1,4 +1,5 @@
-"""The helper of the steps of the rust profile: test, integration, coverage-check, docstring-check and test-paths.
+"""The helper of the steps of the rust profile: test, integration, coverage-check, docstring-check, test-paths and
+api-check.
 
 The recipes in this folder run it with uv: python steps.py run STEP ARG..., fresh STEP, coverage, docs, test-paths
 PATH... and toml. STEP is test or integration. test runs the unit tests, those of the library and the binaries, and
@@ -12,6 +13,7 @@ git show HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or
 their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top of
 the project, which can be a subfolder of the git repository.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,6 +24,7 @@ import sys
 import tempfile
 import threading
 import tomllib
+import urllib.parse
 
 DIFF_COVER = 'diff-cover==11.0.1'
 # The other place of the config of cargo-sort, which reads tomlfmt.toml from the current folder.
@@ -59,6 +62,24 @@ COVERAGE = ['cargo', 'llvm-cov', 'test', '--all-features', '--locked', '--includ
 STACK = Path('.agents/stack.json')
 DOC_LINTS = ('missing_docs', 'clippy::missing_docs_in_private_items')
 WORK = Path('target/jnprofile-rust')
+# The folder of the run of api-prose-check, as .jnprofile-python and .jnprofile-typescript of the other profiles. The
+# tool api adds it to .gitignore and .worktreedisposable.
+API_WORK = Path('.jnprofile-rust')
+SMALLDOCS = 'smalldocs==0.5.12'
+DOCS_CONFIG = Path('docs/_smalldocs.yml')
+# The nightly toolchain that runs rustdoc for smalldocs, which needs -Z unstable-options. smalldocs 0.5.12 reads
+# only the formats 57 and 61 of the JSON of rustdoc, so the date is fixed. The program nightly of profile.json
+# installs the same toolchain.
+NIGHTLY = 'nightly-2026-11-12'
+# The checker of nossaifd, which the prose role installs. api prose checks the API pages with it.
+PROSE_CHECKER = Path('.agents/skills/nossaifd/scripts/check.py')
+# The gate of nossaifd, which the prose role installs too. Its base_commit gives the base of api-prose-check in CI or
+# with --base, as for check-changed of nossaifd.
+PROSE_GATE = Path('.agents/skills/nossaifd/scripts/prose_gate.py')
+# The variables of CI that the base of api-prose-check can come from, so a run with others runs again.
+BASE_VARIABLES = ('CI', 'GITHUB_BASE_REF', 'GITHUB_REF', 'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH')
+# The start of each source link of the API pages that api prose builds, so that it finds the file of each item.
+MARK = 'https://jnprofile-rust.invalid/'
 
 
 def git(*args):
@@ -144,7 +165,7 @@ def worktree_tree():
 
     It starts from HEAD in a temporary index of its own, so neither the real index nor a second run at the same
     time changes. The tree only ties a report to its run: steps.py compares it with its own trees, never with
-    the tree of jlog or jagt, which start from a copy of the index. The folder target of the project never counts. A file that git cannot
+    the tree of jlog or jagt, which start from a copy of the index. The folders target and .jnprofile-rust of the project never count. A file that git cannot
     index, such as a nested repository with no commit, gives None, and git's message goes to the error output.
     """
     WORK.mkdir(parents=True, exist_ok=True)
@@ -156,8 +177,8 @@ def worktree_tree():
     try:
         if has_parent():
             subprocess.run(['git', 'read-tree', 'HEAD'], env=env, check=True, capture_output=True)
-        # git refuses to name an ignored path, even to exclude it, so the exclude is only for a target that git sees.
-        specs = [':/'] if ignored('target') else [':/', ':(exclude)target']
+        # git refuses to name an ignored path, even to exclude it, so the exclude is only for a folder that git sees.
+        specs = [':/'] + [f':(exclude){folder}' for folder in ('target', str(API_WORK)) if not ignored(folder)]
         subprocess.run(['git', 'add', '-A', '--', *specs], env=env, check=True, capture_output=True)
         return subprocess.run(['git', 'write-tree'], env=env, check=True, capture_output=True,
                               text=True).stdout.strip()
@@ -175,29 +196,47 @@ def report(step):
     return REPORTS / f'{step}.lcov'
 
 
+def run_folder(step):
+    """The folder of the files of the run of STEP: target/llvm-cov for test and integration, .jnprofile-rust for
+    prose."""
+    return REPORTS if step in COVERED else API_WORK
+
+
 def saved_run(step):
-    """The file that ties the report of STEP to its run: target/llvm-cov/STEP.run.json."""
-    return REPORTS / f'{step}.run.json'
+    """The file that ties the run of STEP, and its report, to the run of just: STEP.run.json in run_folder."""
+    return run_folder(step) / f'{step}.run.json'
 
 
 def pending_run(step):
-    """The file that holds the run of STEP while its tests run: target/llvm-cov/STEP.run.pending."""
-    return REPORTS / f'{step}.run.pending'
+    """The file that holds the run of STEP while it goes on: STEP.run.pending in run_folder."""
+    return run_folder(step) / f'{step}.run.pending'
+
+
+def run_key(step, args):
+    """What else a run of STEP with ARGS depends on, beside the run ID and the tree, or None when such a run is not
+    saved. A run of test or integration with ARGS runs only some tests, so it is not saved. api-prose-check, the
+    run prose, takes --base REF, and in CI its base comes from the variables of CI, so these go into the key: a run
+    with another base runs again. The commit of HEAD goes in too: a base resolves against HEAD, so a run on another
+    HEAD with the same tree runs again."""
+    if step == 'prose':
+        head = git('rev-parse', '-q', '--verify', 'HEAD').stdout.strip()
+        return {'args': list(args), 'env': {key: os.environ.get(key, '') for key in BASE_VARIABLES}, 'head': head}
+    return None if args else {}
 
 
 def begin(step, args):
-    """Save the run ID and the worktree tree before a run of the tests of STEP, in target/llvm-cov/STEP.run.pending.
+    """Save the run ID and the worktree tree before a run of STEP, test, integration or prose, in its pending file.
 
-    Only a run of all the tests, with no ARGS, inside a run of just that has JLOG_RUN saves them. Any other run
-    saves nothing, so coverage-check runs the tests again. Returns the exit code, always 0.
+    Only a run inside a run of just that has JLOG_RUN, and with a key of run_key, saves them. Any other run saves
+    nothing, so the next step that needs the run runs it again. Returns the exit code, always 0.
     """
     saved_run(step).unlink(missing_ok=True)
     pending_run(step).unlink(missing_ok=True)
-    run = os.environ.get('JLOG_RUN', '')
-    tree = worktree_tree() if not args and run else None
+    run, key = os.environ.get('JLOG_RUN', ''), run_key(step, args)
+    tree = worktree_tree() if key is not None and run else None
     if tree:
-        REPORTS.mkdir(parents=True, exist_ok=True)
-        pending_run(step).write_text(json.dumps({'run': run, 'tree': tree}) + '\n')
+        run_folder(step).mkdir(parents=True, exist_ok=True)
+        pending_run(step).write_text(json.dumps({'run': run, 'tree': tree, 'key': key}) + '\n')
     return 0
 
 
@@ -216,8 +255,29 @@ def stamp(step):
     if isinstance(saved, dict) and saved.get('tree') and saved['tree'] == worktree_tree():
         saved_run(step).write_text(json.dumps(saved) + '\n')
     else:
-        print(f'{step}: a file changed while the tests ran, so coverage-check runs them again', file=sys.stderr)
+        print(f'{recipe_of(step)}: a file changed during the run, so the next step that needs it runs it again',
+              file=sys.stderr)
     return 0
+
+
+def recipe_of(step):
+    """The recipe of the run STEP, for a message: prose is the run of api-prose-check."""
+    return 'api-prose-check' if step == 'prose' else step
+
+
+def ran(step, args):
+    """True when STEP passed before in this run of just, on this tree and with the same key of run_key for ARGS. So
+    a check that two steps of just check can need, such as api-prose-check, runs once."""
+    run, key = os.environ.get('JLOG_RUN', ''), run_key(step, args)
+    try:
+        saved = json.loads(saved_run(step).read_text())
+    except (OSError, ValueError):
+        saved = None
+    if (run and key is not None and isinstance(saved, dict) and saved.get('run') == run
+            and saved.get('key', {}) == key and saved.get('tree') and saved['tree'] == worktree_tree()):
+        print(f'{recipe_of(step)}: it passed before in this run, {run}, on this tree, so it does not run again')
+        return True
+    return False
 
 
 def counts(step):
@@ -726,9 +786,425 @@ def toml(args):
     return 1 if failed else 0
 
 
+def crates():
+    """The Cargo packages of the workspace that have a library or a binary, as (name, manifest), in the order of
+    cargo metadata, from the current folder. smalldocs documents a library, else the binary."""
+    done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        raise SystemExit('api-check: cargo metadata failed')
+    return [(package['name'], package['manifest_path']) for package in json.loads(done.stdout)['packages']
+            if any(set(target['kind']) & (LIBRARY | {'bin'}) for target in package['targets'])]
+
+
+def api_settings(folder):
+    """The folder of the smalldocs config that api-check uses, and a note, or None and a note, or None and an exit
+    code on an error.
+
+    When docs/_smalldocs.yml has the key api with a Rust section, a section with language: rust, the folder is
+    FOLDER/rust, with a config of only those sections, which rust_config writes. Otherwise it is FOLDER, with a
+    section for each crate of the workspace that has a library or a binary. With no such crate, it is None.
+    """
+    try:
+        text = DOCS_CONFIG.read_text()
+    except (OSError, UnicodeDecodeError):
+        text = ''
+    if re.search(r'^api\s*:', text, re.MULTILINE):
+        own = folder / 'rust'
+        code = subprocess.run(smalldocs('python', str(Path(__file__).resolve()), 'config', str(DOCS_CONFIG.parent),
+                                        str(own))).returncode
+        if code == 0:
+            return own, f'the Rust sections of the api settings of {DOCS_CONFIG}'
+        if code != 3:
+            return None, code
+    try:
+        found = crates()
+    except SystemExit as error:
+        print(error, file=sys.stderr)
+        return None, 2
+    if not found:
+        return None, f'no crate with a library or a binary. The key api of {DOCS_CONFIG} can name the crate'
+    sections = [{'language': 'rust', 'manifest': manifest, 'toolchain': NIGHTLY, 'out': f'api/{name}'}
+                for name, manifest in found]
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / '_smalldocs.yml').write_text(json.dumps({'api': sections if len(sections) > 1 else sections[0]}) + '\n')
+    about = f'the crate {found[0][0]}' if len(found) == 1 else f'the {len(found)} crates of the workspace'
+    return folder, about
+
+
+def smalldocs(*args):
+    """The command that runs ARGS with smalldocs, with uv. smalldocs runs cargo +TOOLCHAIN rustdoc for the JSON."""
+    return ['uv', 'run', '--no-project', '--quiet', '--with', SMALLDOCS, *args]
+
+
+def ci_named():
+    """True when the variable CI is set to a value other than empty, false and 0. Only for the error of a missing
+    prose_gate.py: with prose_gate.py, its own ci_set decides."""
+    return os.environ.get('CI', '').strip().lower() not in ('', 'false', '0')
+
+
+def load_gate():
+    """The module prose_gate.py of the prose role, from the project, or None when the project does not have it."""
+    if not PROSE_GATE.is_file():
+        return None
+    # The import would write __pycache__ into the installed skill. The gate sets the flag itself, but too late.
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('jnprofile_prose_gate', PROSE_GATE.resolve())
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def prose_base(option):
+    """The base of api-prose-check, as check-changed of nossaifd takes it, so that both check the same changes.
+
+    It is (None, None) with no option and no CI, for the changes since HEAD. Otherwise it is (commit, name), from
+    base_commit of prose_gate.py of the project: the merge base of the option --base REF and HEAD, or in CI the base
+    of the pull request or the push. On an error, it prints the message and gives (None, 2), so that no API page is
+    left out without a word. With no option and no CI, it does not load prose_gate.py, so a local run is as before.
+    """
+    if option is None and not ci_named():
+        return None, None
+    try:
+        gate = load_gate()
+    except Exception as exc:  # noqa: BLE001 - any failure of the import of another package is an error of the step
+        print(f'api-prose-check: {PROSE_GATE} cannot be loaded: {exc}', file=sys.stderr)
+        return None, 2
+    if gate is None or not hasattr(gate, 'base_commit') or not hasattr(gate, 'ci_set'):
+        print(f'api-prose-check: a base, from --base or from CI, needs base_commit of {PROSE_GATE}, and the project '
+              f'does not have it. Run just install to update the prose role', file=sys.stderr)
+        return None, 2
+    if option is None and not gate.ci_set():
+        return None, None
+    found = git('rev-parse', '--show-toplevel')
+    if found.returncode:
+        print(f'api-prose-check: git cannot find the top of the repository: {found.stderr.strip()}', file=sys.stderr)
+        return None, 2
+    try:
+        commit, name = gate.base_commit(Path(found.stdout.strip()), option)
+    except Exception as exc:  # noqa: BLE001 - a failure of base_commit of another package is an error of the step
+        print(f'api-prose-check: base_commit of {PROSE_GATE} failed: {exc!r}. Run just install to update the prose '
+              f'role', file=sys.stderr)
+        return None, 2
+    if commit is None:
+        print(f'api-prose-check: {name}', file=sys.stderr)
+        return None, 2
+    return commit, name
+
+
+def changed_since(base):
+    """The Rust files that changed since the commit or tree BASE, in the commits and in the working tree, and the
+    untracked ones, relative to the current folder. Deleted files are left out. None on an error of git."""
+    tracked = git('diff', '-z', '--name-only', '--relative', '--no-renames', '--diff-filter=d', base, '--', '*.rs')
+    untracked = git('ls-files', '-z', '--others', '--exclude-standard', '--', '*.rs')
+    if tracked.returncode or untracked.returncode:
+        print(f'api-prose-check: git cannot list the changes since {base}: '
+              f'{(tracked.stderr or untracked.stderr).strip()}', file=sys.stderr)
+        return None
+    return sorted(set(filter(None, tracked.stdout.split('\0'))) | set(filter(None, untracked.stdout.split('\0'))))
+
+
+def api_files(paths):
+    """The paths of PATHS, relative to the current folder, the top of the project, that are files of the API pages by
+    in_api of api_rule.py, the rule that the commit gate reads, and that are not in generated.txt of the parent
+    commit. in_api is is_api with no check of the api tool and the docs role, which api-prose-check does not need.
+    It runs in the top of the project, where docs/_smalldocs.yml is, also when that is a subfolder of the repository.
+    """
+    # The import would write __pycache__ into the installed folder of the profile.
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('jnprofile_rust_api_rule', Path(__file__).resolve().parent / 'api_rule.py')
+    rule = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rule)
+    excluded = matcher(parent_list(GENERATED))
+    try:
+        return [path for path in paths if not excluded(path) and rule.in_api(path)]
+    except Exception as exc:  # noqa: BLE001 - the rule raises on settings that it cannot read
+        # The rule reads the key api only in the form of a block. The changed files of each crate count then, so no
+        # page is left out.
+        print(f'api-prose-check: api_rule.py cannot read the key api of {DOCS_CONFIG}: {exc}. So the changed files of '
+              'each crate count', file=sys.stderr)
+        found = []
+        for path in paths:
+            clean = rule.clean(path)
+            crate = rule.crate_of(clean) if clean.endswith('.rs') and not rule.excluded(clean) else None
+            if crate is not None and not excluded(path) and rule.in_crate(clean, crate):
+                found.append(path)
+        return found
+
+
+def api(action, option=None):
+    """Run the api check: smalldocs api check with the settings of api_settings, for ACTION check. For ACTION prose,
+    check the API page of each changed file with the checker of nossaifd. A changed file changed since HEAD, or
+    since the base of prose_base, from OPTION, the value of --base, or from CI. Returns the exit code."""
+    if action == 'prose' and not PROSE_CHECKER.is_file():
+        print(f'api-prose-check: no checker of nossaifd at {PROSE_CHECKER}, so the API pages are not checked. The prose '
+              f'role installs it')
+        return 0
+    base = about_base = None
+    if action == 'prose':
+        base, about_base = prose_base(option)
+        if base is None and about_base is not None:
+            return about_base
+    with tempfile.TemporaryDirectory() as temp:
+        folder, about = api_settings(Path(temp))
+        if folder is None and isinstance(about, int):
+            return about
+        if folder is None:
+            print(f'{"api-check" if action == "check" else "api-prose-check"}: {about}, so there is no API to check')
+            return 0
+        if action == 'check':
+            print(f'api-check: smalldocs api check, with {about}', flush=True)
+            code = subprocess.run(smalldocs('smalldocs', 'api', 'check', '--dir', str(folder))).returncode
+            if code == 1:
+                print('api-check: give each public item a doc comment, each parameter a comment after it on its line '
+                      'or a line of an # Arguments section, and each return other than () a # Returns section',
+                      file=sys.stderr)
+            elif code:
+                print(f'api-check: smalldocs or uv failed with the exit code {code}. smalldocs needs the toolchain '
+                      f'{NIGHTLY}, which just install api installs. The key api of {DOCS_CONFIG} can name the crate',
+                      file=sys.stderr)
+            return code
+        if base is not None:
+            changed = changed_since(base)
+            if changed is None:
+                return 2
+        elif has_parent():
+            changed = changed_code()
+        else:
+            listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.rs')
+            changed = sorted(filter(None, listed.stdout.split('\0')))
+        changed = api_files(changed)
+        since = f'since {about_base}' if base is not None else 'since HEAD'
+        if not changed:
+            print(f'api-prose-check: no code of the API changed {since}')
+            return 0
+        out = Path(temp) / 'pages'
+        out.mkdir()
+        sys.stdout.flush()
+        code = subprocess.run(smalldocs('python', str(Path(__file__).resolve()), 'pages', str(folder), str(out),
+                                        *changed)).returncode
+        if code:
+            return code
+        # The API pages first, then the module comments.
+        pages = sorted(out.rglob('*.md'), key=lambda page: (not page.is_relative_to(out / 'pages'), page))
+        if not pages:
+            print('api-prose-check: no changed file has an API page or a module comment')
+            return 0
+        names = [page.relative_to(out / 'pages').with_suffix('').as_posix() if page.is_relative_to(out / 'pages')
+                 else f"the module comment of {page.relative_to(out / 'modules').with_suffix('').as_posix()}"
+                 for page in pages]
+        print(f'api-prose-check: the API pages {", ".join(names)}, of the files changed {since}', flush=True)
+        code = subprocess.run(['uv', 'run', '--no-project', '--quiet', 'python', str(PROSE_CHECKER),
+                               *map(str, pages)]).returncode
+        if code:
+            print('api-prose-check: fix each hard problem in the doc comment that it comes from', file=sys.stderr)
+        return code
+
+
+def absolute(value, folder):
+    """VALUE, a path or a list of paths of a smalldocs config in FOLDER, with each path absolute."""
+    if isinstance(value, list):
+        return [absolute(item, folder) for item in value]
+    return str((folder / value).resolve()) if isinstance(value, str) else value
+
+
+def linked_files(text):
+    """The files that the source links of the page TEXT name, as paths relative to the top of the project.
+
+    smalldocs writes each link as MARK, the path relative to the root of the api settings, which pages() sets to the
+    top of the project, and #L with the line. It percent-encodes a path with a space, a # or a letter outside ASCII.
+    """
+    return {urllib.parse.unquote(match.group(1)) for match in re.finditer(re.escape(MARK) + r'([^)\s#]+)', text)}
+
+
+def block_end(source, at):
+    """The end of the block comment that starts at AT of SOURCE, after its */, with the nested block comments that
+    Rust allows, or None when it is not closed."""
+    depth, at = 1, at + 2
+    while depth:
+        found = re.compile(r'/\*|\*/').search(source, at)
+        if not found:
+            return None
+        depth += 1 if found.group() == '/*' else -1
+        at = found.end()
+    return at
+
+
+def attribute_end(source, at):
+    """The end of the inner attribute #![...] that starts at AT of SOURCE, with the brackets inside it and the
+    brackets in its strings, or None when it is not closed."""
+    depth, at = 0, at + 2
+    while at < len(source):
+        char = source[at]
+        if char == '"':
+            found = re.compile(r'"(?:\\.|[^"\\])*"', re.S).match(source, at)
+            if not found:
+                return None
+            at = found.end()
+            continue
+        depth += {'[': 1, ']': -1}.get(char, 0)
+        at += 1
+        if depth == 0:
+            return at
+    return None
+
+
+def module_comment(path):
+    """The text of the module comment of the Rust file PATH, or None when the file has none: its //! lines and its
+    /*! */ comments at the top of the file, before any item, as rustdoc reads them. Blank lines, plain comments and
+    inner attributes, such as #![forbid(unsafe_code)], may come before and between them."""
+    try:
+        source = Path(path).read_text(errors='replace')
+    except OSError:
+        return None
+    source, at, lines = source.lstrip('\ufeff'), 0, []
+    while at < len(source):
+        if source[at].isspace():
+            at += 1
+        elif source.startswith('//!', at):
+            end = source.find('\n', at)
+            end = len(source) if end < 0 else end
+            text = source[at + 3:end]
+            lines.append(text[1:] if text.startswith(' ') else text)
+            at = end
+        elif source.startswith('///', at) and not source.startswith('////', at):
+            break
+        elif source.startswith('//', at):
+            end = source.find('\n', at)
+            at = len(source) if end < 0 else end
+        elif source.startswith('/*', at):
+            end = block_end(source, at)
+            if end is None:
+                break
+            if source.startswith('/*!', at):
+                lines += [re.sub(r'^\s*\* ?', '', line) for line in source[at + 3:end - 2].splitlines()]
+            elif source.startswith('/**', at) and not source.startswith('/**/', at) \
+                    and not source.startswith('/***', at):
+                break
+            at = end
+        elif source.startswith('#![', at):
+            end = attribute_end(source, at)
+            if end is None:
+                break
+            at = end
+        else:
+            break
+    return '\n'.join(lines).strip() or None
+
+
+def rust_config(folder, target, links):
+    """Write a smalldocs config into the folder TARGET with only the Rust sections of the key api of the config in
+    FOLDER, and return those sections. It returns 3 when there is none, and 2 when PyYAML cannot read the config.
+
+    The manifest and the root become absolute paths. A section with no toolchain gets NIGHTLY, which the profile
+    installs. With LINKS, each section gets its own out, the top of the project as its root and the source link
+    MARK, for pages(). It runs with smalldocs, whose PyYAML reads the config.
+    """
+    import yaml
+
+    folder, target = Path(folder).resolve(), Path(target)
+    try:
+        data = yaml.safe_load((folder / '_smalldocs.yml').read_text())
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        print(f'api-check: {folder / "_smalldocs.yml"} cannot be read: {exc}', file=sys.stderr)
+        return 2
+    if data is not None and not isinstance(data, dict):
+        print(f'api-check: {folder / "_smalldocs.yml"} is no map of settings', file=sys.stderr)
+        return 2
+    settings = (data or {}).get('api') or {}
+    sections = [section for section in (settings if isinstance(settings, list) else [settings])
+                if isinstance(section, dict) and section.get('language') == 'rust']
+    own = []
+    for number, section in enumerate(sections):
+        section = dict(section)
+        for key in ('manifest', 'root'):
+            if key in section:
+                section[key] = absolute(section[key], folder)
+        # As smalldocs: the Cargo.toml of root. Its root is FOLDER, the folder of the site, when FOLDER holds a
+        # Cargo.toml, a package.json or a .git, and the folder above it otherwise.
+        at_site = any((folder / mark).exists() for mark in ('Cargo.toml', 'package.json', '.git'))
+        root = section.get('root') or str(folder if at_site else folder.parent)
+        section.setdefault('manifest', str(Path(root) / 'Cargo.toml'))
+        section.setdefault('toolchain', NIGHTLY)
+        if links:
+            section.update(out=f'api{number}', source=MARK.rstrip('/'), root=str(top()))
+        own.append(section)
+    if not own:
+        return 3
+    target.mkdir(parents=True, exist_ok=True)
+    (target / '_smalldocs.yml').write_text(yaml.safe_dump({'api': own if len(own) > 1 else own[0]}))
+    return own
+
+
+def pages(folder, out, files):
+    """Write the API page of each changed file of FILES under OUT, as a Markdown file, from the Rust sections of the
+    key api of the smalldocs config in FOLDER, and its module comment as a page of its own.
+
+    It runs with smalldocs. rust_config writes the config, and smalldocs builds the pages there. A page is a page of
+    a changed file when the source link of one of its items names that file. A page holds the first paragraph of the
+    module comment in its front matter, which the checker of nossaifd does not read as prose. So the module comment
+    of each changed file goes into a page of its own. Returns the exit code.
+    """
+    out = Path(out)
+    config = out / 'config'
+    own = rust_config(folder, config, True)
+    if own == 3:
+        print('api-prose-check: the api settings have no section with language: rust')
+        return 0
+    if isinstance(own, int):
+        return own
+    sys.stdout.flush()
+    build = subprocess.run(['smalldocs', 'api', 'build', '--dir', str(config)], capture_output=True, text=True)
+    if build.returncode:
+        print(build.stdout + build.stderr, end='')
+        print('api-prose-check: smalldocs cannot build the API pages', file=sys.stderr)
+        return build.returncode
+    wanted = {Path(name).as_posix() for name in files}
+    for number in range(len(own)):
+        built = config / f'api{number}'
+        for page in sorted(built.rglob('*.qmd')):
+            text = page.read_text()
+            if linked_files(text) & wanted:
+                # The pages keep their folders, so that a/b.qmd and a.b.qmd stay two pages.
+                target = out / 'pages' / (f'{number}' if len(own) > 1 else '') / page.relative_to(built)
+                target = target.with_suffix('.md')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+    for name in sorted(wanted):
+        comment = module_comment(name)
+        if comment:
+            target = out / 'modules' / (name + '.md')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f'---\ntitle: "{Path(name).name}"\n---\n\n{comment}\n')
+    return 0
+
+
+def base_option(args):
+    """The REF of the arguments ARGS of api-prose-check, --base REF or --base=REF, or '' with no base. As in
+    check-changed of nossaifd, -v is taken and does nothing here, and the last --base counts. On an error, it prints
+    the message and gives the exit code 2."""
+    ref = ''
+    rest = list(args)
+    while rest:
+        arg = rest.pop(0)
+        if arg == '-v':
+            continue
+        if arg == '--base' and rest:
+            ref = rest.pop(0)
+        elif arg.startswith('--base='):
+            ref = arg[len('--base='):]
+        else:
+            print(f'api-prose-check: unknown arguments {" ".join(args)}. It takes only --base REF and -v',
+                  file=sys.stderr)
+            return 2
+        if not ref:
+            print('api-prose-check: --base needs a branch or a commit', file=sys.stderr)
+            return 2
+    return ref
+
+
 def main(argv):
-    """Run the command of ARGV and return its exit code: run STEP [ARG...], fresh STEP, coverage, docs,
-    test-paths [PATH...] or toml [--check]. STEP is test or integration."""
+    """Run the command of ARGV and return its exit code, as the usage at the end lists the commands."""
     if len(argv) >= 2 and argv[0] == 'run' and argv[1] in COVERED:
         return run_tests(argv[1], argv[2:])
     if len(argv) == 2 and argv[0] == 'fresh' and argv[1] in COVERED:
@@ -741,8 +1217,25 @@ def main(argv):
         return test_paths(argv[1:])
     if argv in (['toml'], ['toml', '--check']):
         return toml(argv[1:])
-    print('usage: steps.py run STEP [ARG...] | fresh STEP | coverage | docs | test-paths [PATH...] | toml [--check], '
-          'where STEP is test or integration', file=sys.stderr)
+    if argv[:2] == ['ran', 'prose']:
+        return 0 if ran('prose', argv[2:]) else 1
+    if argv[:2] == ['begin', 'prose']:
+        return begin('prose', argv[2:])
+    if argv == ['stamp', 'prose']:
+        return stamp('prose')
+    if argv == ['api', 'check']:
+        return api('check')
+    if argv[:2] == ['api', 'prose']:
+        option = base_option(argv[2:])
+        return option if isinstance(option, int) else api('prose', option or None)
+    if argv[:1] == ['pages'] and len(argv) >= 3:
+        return pages(argv[1], argv[2], argv[3:])
+    if argv[:1] == ['config'] and len(argv) == 3:
+        own = rust_config(argv[1], argv[2], False)
+        return own if isinstance(own, int) else 0
+    print('usage: steps.py run STEP [ARG...] | fresh STEP | coverage | docs | test-paths [PATH...] | toml [--check] | '
+          'ran prose [ARG...] | begin prose [ARG...] | stamp prose | api check | api prose [--base REF] | '
+          'pages DOCS OUT [FILE...] | config DOCS OUT, where STEP is test or integration', file=sys.stderr)
     return 2
 
 

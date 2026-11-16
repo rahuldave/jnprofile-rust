@@ -96,6 +96,13 @@
       "install": "cargo +stable install --locked cargo-sort@2.1.4",
       "install_in": "home",
       "description": "Sorts the tables of Cargo.toml, for toml-fmt and toml-check."
+    },
+    {
+      "name": "nightly",
+      "check": "rustup run nightly-2026-11-12 rustc --version",
+      "install": "rustup toolchain install nightly-2026-11-12 --profile minimal",
+      "install_in": "home",
+      "description": "The nightly toolchain of 2026-11-12, whose rustdoc writes the JSON that smalldocs reads, for api-check. It does not change the default toolchain."
     }
   ],
   "tools": {
@@ -154,6 +161,24 @@
         "clippy"
       ]
     },
+    "api": {
+      "packages": [],
+      "recipes": "api.just",
+      "verify": [
+        "api-check"
+      ],
+      "lines": {
+        ".gitignore": [
+          ".jnprofile-rust/"
+        ],
+        ".worktreedisposable": [
+          ".jnprofile-rust/"
+        ]
+      },
+      "programs": [
+        "nightly"
+      ]
+    },
     "toml": {
       "packages": [],
       "programs": [
@@ -172,7 +197,8 @@
     "typecheck",
     "integration",
     "test",
-    "docstring"
+    "docstring",
+    "api"
   ],
   "base": {
     "recipes": "base.just",
