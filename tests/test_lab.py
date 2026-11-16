@@ -1,7 +1,7 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in ../jnterfaces
-next to this repository. BASE has the rust entry of jnterfaces#34 and the programs of jnterfaces#39. The fixed commit
+next to this repository. BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39 and jlog v0.1.1. The fixed commit
 keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust,
 as tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json
@@ -23,8 +23,8 @@ REPO = Path(__file__).resolve().parents[1]
 JNTERFACES = Path(os.environ.get('JNTERFACES', REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#39, which installs the programs of a profile.
-BASE = 'f9e66f7d6fac47cc0add332138be355b609e1dd1'
+# The merge of jnterfaces#47. It installs the programs of a profile (#39) and pins jlog v0.1.1 (#44).
+BASE = '7fe681106dcc1f2b2738a0abade8cba40a860dbb'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -174,6 +174,30 @@ class Guard(unittest.TestCase):
 
 
 @unittest.skipUnless(READY, WHY)
+class Pin(unittest.TestCase):
+    """The docs agree with the commit of jnterfaces that the lab pins. This needs only git and the clone."""
+    PAGES = ('README.md', 'docs/index.md', 'docs/jnterfaces-entry.md')
+
+    def test_the_docs_name_the_jlog_version_that_the_installer_of_jnterfaces_needs(self):
+        script = subprocess.run(['git', '-C', str(JNTERFACES), 'show', f'{BASE}:scripts/install_stack.py'],
+                                capture_output=True, text=True, check=True).stdout
+        version = re.search(r"^JLOG_INSTALL = .*git checkout (v\d+\.\d+\.\d+)", script, re.M).group(1)
+        for page in self.PAGES:
+            text = (REPO / page).read_text()
+            # Each version such as v0.1.1 in these pages is a version of jlog, also across a line break.
+            self.assertEqual(set(re.findall(r'\bv\d+\.\d+\.\d+\b', text)), {version}, page)
+            self.assertRegex(text, rf'jlog`?\s+{re.escape(version)}', page)
+
+    def test_the_docs_name_the_commit_that_the_lab_pins(self):
+        for page in ('README.md', 'docs/jnterfaces-entry.md'):
+            text = (REPO / page).read_text()
+            self.assertIn(f'`{BASE[:7]}`', text, page)
+            # No other commit of the lab: the old pins are gone.
+            self.assertNotIn('f9e66f7', text, page)
+        self.assertIn('`2cfb176`', (REPO / 'docs/jnterfaces-entry.md').read_text())
+
+
+@unittest.skipUnless(READY, WHY)
 class RustLab(unittest.TestCase):
     """Each test gets a copy of one Cargo project that has the profile installed and one commit."""
 
@@ -230,6 +254,9 @@ class RustLab(unittest.TestCase):
         self.assertIn('Profile(s) found from the files of the project: rust', self.installed.stderr)
         saved = json.loads((self.app / '.agents/stack.json').read_text())
         self.assertEqual(saved['profiles'], ['rust'])
+        # The installer copies the code and tests globs of the profile into the record (jnterfaces#34 and #46).
+        self.assertEqual(saved['code'], {'rust': PROFILE['code']})
+        self.assertEqual(saved['tests'], {'rust': PROFILE['tests']})
         self.assertEqual([pair.split(':')[1] for pair in saved['tools']], ['lint', 'typecheck', 'test', 'docstring'])
         for path in ('.agents/just/rust/steps.py', '.agents/skills/rust-profile/SKILL.md',
                      *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'docs', 'prose'))):
