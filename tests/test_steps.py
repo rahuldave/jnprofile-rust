@@ -70,6 +70,175 @@ class Docs(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+STAND_IN_CARGO = """#!/bin/sh
+if [ "$1" = metadata ]; then cat "$META"; exit "${META_CODE:-0}"; fi
+printf '%s\\n' "$*" >> "$LOG"
+out=; name=x; last=
+for arg in "$@"; do
+  [ "$last" = --output-path ] && out=$arg
+  [ "$last" = --package ] && name=$arg
+  last=$arg
+done
+[ -n "$out" ] && printf 'SF:/s/%s.rs\\nDA:1,1\\nend_of_record\\n' "$name" > "$out"
+exit "${CODE:-0}"
+"""
+
+
+class Merge(unittest.TestCase):
+    def test_a_line_runs_when_one_report_runs_it_and_is_measured_when_one_report_measures_it(self):
+        one = 'SF:/p/a.rs\nFN:1,f\nDA:1,1\nDA:2,0\nend_of_record\nSF:/p/b.rs\nDA:5,0\nend_of_record\n'
+        two = 'SF:/p/a.rs\nDA:2,4\nDA:9,0\nend_of_record\n'
+        self.assertEqual(steps.merge_lcov([one, two]),
+                         'SF:/p/a.rs\nDA:1,1\nDA:2,4\nDA:9,0\nend_of_record\nSF:/p/b.rs\nDA:5,0\nend_of_record\n')
+        self.assertEqual(steps.merge_lcov(['', '']), '')
+
+    def test_missed_lines_names_each_line_with_a_count_of_0(self):
+        root = Path('/p')
+        self.assertEqual(steps.missed_lines('SF:/p/b.rs\nDA:5,0\nDA:6,2\nend_of_record\nSF:/p/a.rs\nDA:3,0\n'
+                                            'end_of_record\n', root), ['a.rs:3', 'b.rs:5'])
+
+
+class Targets(unittest.TestCase):
+    """target_flags and run_tests, with a stand-in cargo that prints the metadata and logs its arguments."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(os.path.realpath(temp.name))
+        (self.root / 'bin').mkdir()
+        (self.root / 'bin/cargo').write_text(STAND_IN_CARGO)
+        (self.root / 'bin/cargo').chmod(0o755)
+        self.log = self.root / 'cargo.log'
+        env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
+        env.update(PATH=f'{self.root / "bin"}:{os.environ["PATH"]}', META=str(self.root / 'meta.json'),
+                   LOG=str(self.log))
+        patched = mock.patch.dict(os.environ, env, clear=True)
+        patched.start()
+        self.addCleanup(patched.stop)
+        old = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, old)
+
+    def packages(self, *groups):
+        """Write the metadata of a workspace with one package for each list of targets in GROUPS.
+
+        A target is a kind, such as 'lib', or a tuple of its kind, its name and the value of its key test.
+        """
+        packages = []
+        for n, group in enumerate(groups):
+            targets = []
+            for i, target in enumerate(group):
+                kind, name, tested = target if isinstance(target, tuple) else (target, f't{n}{i}', True)
+                targets.append({'name': name, 'kind': [kind], 'test': tested, 'src_path': f'/x/{n}/{i}.rs'})
+            packages.append({'name': f'p{n}', 'id': f'path+file:///x/{n}#p{n}@0.1.0', 'targets': targets})
+        (self.root / 'meta.json').write_text(json.dumps({'packages': packages}))
+
+    def test_test_takes_the_libraries_and_the_tested_binaries_by_name(self):
+        for groups, want in (([['lib', ('bin', 'app', True), 'test']], [['--workspace', '--lib', '--bin', 'app']]),
+                             ([[('bin', 'app', True)]], [['--workspace', '--bin', 'app']]),
+                             ([['proc-macro']], [['--workspace', '--lib']]),
+                             ([['cdylib'], [('bin', 'b', True)]], [['--workspace', '--lib', '--bin', 'b']]),
+                             ([[('bin', 'b', False)]], []),
+                             ([['test', 'bench', 'example']], [])):
+            self.packages(*groups)
+            self.assertEqual(steps.selections('test'), want, groups)
+
+    def test_a_library_with_test_false_leaves_the_others_each_in_a_run_of_its_package(self):
+        self.packages([('lib', 'a', False)], ['lib'], [('lib', 'c', True), ('bin', 'cb', True)])
+        self.assertEqual(steps.selections('test'), [['--package', 'path+file:///x/1#p1@0.1.0', '--lib'],
+                                                   ['--package', 'path+file:///x/2#p2@0.1.0', '--lib', '--bin', 'cb']])
+        self.packages([('lib', 'a', False)])
+        self.assertEqual(steps.selections('test'), [])
+
+    def test_integration_takes_each_tested_test_example_and_bench_by_name(self):
+        self.packages(['lib', ('test', 'api', True), ('test', 'slow', False), ('example', 'demo', True),
+                       ('example', 'plain', False), ('bench', 'speed', True)], [('test', 'api', True)])
+        self.assertEqual(steps.selections('integration'), [['--workspace', '--test', 'api', '--example', 'demo',
+                                                            '--bench', 'speed']])
+        self.packages(['lib', 'bin', ('test', 'slow', False), ('bench', 'b', False)])
+        self.assertEqual(steps.selections('integration'), [])
+
+    def test_a_name_that_one_package_tests_and_another_does_not_gives_a_run_for_each_package(self):
+        self.packages(['lib', ('test', 'it', True)], ['lib', ('test', 'it', False), ('test', 'own', True)], ['lib'])
+        self.assertEqual(steps.selections('integration'), [['--package', 'path+file:///x/0#p0@0.1.0', '--test', 'it'],
+                                                          ['--package', 'path+file:///x/1#p1@0.1.0', '--test', 'own']])
+        self.packages([('bin', 'tool', True)], [('bin', 'tool', False)])
+        self.assertEqual(steps.selections('test'), [['--package', 'path+file:///x/0#p0@0.1.0', '--bin', 'tool']])
+
+    def test_extra_arguments_that_select_targets_take_the_place_of_the_selections(self):
+        for args, want in ((['--test', 'api'], 'targets'), (['--test=api'], 'targets'), (['--doc'], 'targets'),
+                           (['-p', 'x'], 'packages'), (['-px'], 'packages'), (['--package=x'], 'packages'),
+                           (['--all', '--lib'], 'packages'), (['--lib', '--workspace'], 'packages'),
+                           (['--exclude', 'b'], 'targets'), (['--workspace', '--exclude', 'b'], 'packages'),
+                           (['parse'], None), (['parse', '--', '--test', '-p'], None), ([], None)):
+            self.assertEqual(steps.chosen_by(args), want, args)
+        self.packages(['lib', ('test', 'api', True), ('test', 'other', True)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('integration', ['--test', 'api']), 0)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            'llvm-cov test --all-features --locked --include-build-script --workspace --lcov --output-path '
+            'target/llvm-cov/integration.part0.lcov --test api'])
+        self.log.unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', ['-p', 'core', '--lib']), 0)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            'llvm-cov test --all-features --locked --include-build-script --lcov --output-path '
+            'target/llvm-cov/test.part0.lcov -p core --lib'])
+
+    def test_run_gives_cargo_the_targets_the_report_and_the_arguments_last(self):
+        self.packages(['lib', ('test', 'api', True)])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(steps.run_tests('integration', ['parse', '--', '--nocapture']), 0)
+        want = ('llvm-cov test --all-features --locked --include-build-script --workspace --test api --lcov '
+                '--output-path target/llvm-cov/integration.part0.lcov parse -- --nocapture')
+        self.assertEqual(self.log.read_text().splitlines(), [want])
+        self.assertIn('cargo ' + want, out.getvalue())
+        self.assertEqual(steps.report('integration').read_text(), 'SF:/s/x.rs\nDA:1,1\nend_of_record\n')
+
+    def test_run_merges_the_report_of_each_run_of_cargo(self):
+        self.packages([('lib', 'a', False)], ['lib'], ['lib'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', []), 0)
+        self.assertEqual(len(self.log.read_text().splitlines()), 2)
+        self.assertEqual(steps.report('test').read_text(),
+                         'SF:/s/path+file:///x/1#p1@0.1.0.rs\nDA:1,1\nend_of_record\n'
+                         'SF:/s/path+file:///x/2#p2@0.1.0.rs\nDA:1,1\nend_of_record\n')
+
+    def test_run_with_no_target_runs_no_cargo_test_and_writes_an_empty_report(self):
+        self.packages(['lib'])
+        steps.report('integration').parent.mkdir(parents=True)
+        steps.report('integration').write_text('SF:old\nend_of_record\n')
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(steps.run_tests('integration', []), 0)
+        self.assertFalse(self.log.exists())
+        self.assertEqual(steps.report('integration').read_text(), '')
+        self.assertIn('integration: the workspace has no test target, so no test runs', out.getvalue())
+
+    def test_run_gives_the_code_of_a_failed_cargo_and_removes_the_old_report(self):
+        self.packages(['lib'])
+        steps.report('test').parent.mkdir(parents=True)
+        steps.report('test').write_text('SF:old\nend_of_record\n')
+        with mock.patch.dict(os.environ, CODE='101'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', []), 101)
+        self.assertFalse(steps.report('test').exists())
+        self.assertFalse(steps.pending_run('test').exists())
+
+    def test_run_fails_when_cargo_metadata_fails(self):
+        self.packages(['lib'])
+        with mock.patch.dict(os.environ, META_CODE='101'), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(steps.run_tests('test', []), 1)
+        self.assertIn('test: cargo metadata failed', err.getvalue())
+        self.assertFalse(self.log.exists())
+
+    def test_main_runs_only_the_two_steps(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(steps.main(['run', 'docs']), 2)
+            self.assertEqual(steps.main(['fresh']), 2)
+            self.assertEqual(steps.main(['coverage', 'x']), 2)
+        self.assertIn('STEP is test or integration', err.getvalue())
+
+
 class Repository(unittest.TestCase):
     """The lists come from the parent commit, in a temporary git repository."""
 
@@ -149,18 +318,129 @@ class Repository(unittest.TestCase):
             steps.package_of('src/lib.rs')
         self.assertFalse(steps.test_file('src/lib.rs'))
 
-    def test_the_first_commit_names_itself_before_the_report(self):
-        bin_dir = self.root / 'bin'
-        bin_dir.mkdir()
-        (bin_dir / 'cargo').write_text('#!/bin/sh\necho REPORT "$@"\n')
-        (bin_dir / 'cargo').chmod(0o755)
-        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage', 'x'],
-                              cwd=self.root, capture_output=True, text=True,
-                              env=dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}'))
+    def write_reports(self, test, integration):
+        """Write the reports of test and integration, each a list of (path, line, count)."""
+        for step, rows in (('test', test), ('integration', integration)):
+            text = ''.join(f'SF:{self.root / path}\nDA:{line},{count}\nend_of_record\n' for path, line, count in rows)
+            steps.report(step).parent.mkdir(parents=True, exist_ok=True)
+            steps.report(step).write_text(text)
+
+    @contextlib.contextmanager
+    def diff_cover(self):
+        """Stand in for diff-cover, which passes, and give the list of its commands. git still runs."""
+        calls, real = [], subprocess.run
+
+        def run(command, *args, **kwargs):
+            if 'diff-cover' in command:
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0)
+            return real(command, *args, **kwargs)
+        with mock.patch.object(steps.subprocess, 'run', side_effect=run):
+            yield calls
+
+    def first_commit(self):
+        """Run coverage on the first commit, as the script, and return the finished process."""
+        return subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
+                              cwd=self.root, capture_output=True, text=True)
+
+    def test_the_first_commit_names_itself_and_takes_a_line_that_either_report_runs(self):
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [('src/lib.rs', 2, 3)])
+        done = self.first_commit()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stdout.splitlines(), [
-            'coverage-check: the first commit, so every line of code must run in the tests',
-            'REPORT llvm-cov report --include-build-script --fail-under-lines 100'])
+        self.assertEqual(done.stdout.splitlines(),
+                         ['coverage-check: the first commit, so every line of code must run in the tests'])
+
+    def test_the_first_commit_names_each_line_that_no_report_runs(self):
+        self.write_reports([('src/lib.rs', 2, 0), ('src/a.rs', 7, 0)], [('src/lib.rs', 2, 0)])
+        done = self.first_commit()
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.stdout.splitlines()[1:],
+                         ['src/a.rs:7: no test runs this line', 'src/lib.rs:2: no test runs this line'])
+        self.assertIn('write tests', done.stderr)
+
+    def test_on_the_first_commit_a_report_of_integration_that_does_not_count_is_not_read(self):
+        (self.root / '.agents').mkdir()
+        (self.root / '.agents/stack.json').write_text(json.dumps({'steps': ['test', 'coverage-check']}))
+        self.write_reports([('src/lib.rs', 2, 0)], [('src/lib.rs', 2, 1)])
+        self.assertEqual(self.first_commit().returncode, 1)
+        steps.report('integration').unlink()
+        self.assertEqual(self.first_commit().returncode, 1)
+
+    def test_the_report_of_integration_counts_only_when_integration_is_a_step_of_just_check(self):
+        self.assertTrue(steps.counts('integration'))
+        (self.root / '.agents').mkdir()
+        stack = self.root / '.agents/stack.json'
+        for data, want in (({'steps': ['test', 'integration']}, True),
+                           ({'steps': ['test', 'coverage-check']}, False),
+                           ({'steps': ['test', 'integration'], 'provided_steps': ['test', 'integration']}, True),
+                           ({'steps': ['test', 'integration'], 'provided_steps': ['test']}, False),
+                           ({'profiles': ['rust']}, True), (['integration'], True)):
+            stack.write_text(json.dumps(data))
+            self.assertEqual(steps.counts('integration'), want, data)
+            self.assertTrue(steps.counts('test'))
+        stack.write_text('{')
+        self.assertTrue(steps.counts('integration'))
+
+    def test_a_report_that_does_not_count_is_fresh_and_names_why(self):
+        (self.root / '.agents').mkdir()
+        (self.root / '.agents/stack.json').write_text(json.dumps({'steps': ['test']}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertTrue(steps.fresh('integration'))
+        self.assertIn('integration is not in the steps of just check', out.getvalue())
+
+    def test_a_missing_report_of_integration_says_write_tests_and_one_that_does_not_count_is_not_needed(self):
+        self.commit_one()
+        self.write_reports([], [])
+        steps.report('integration').unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.coverage(), 1)
+        self.assertIn('integration.lcov, so write tests', err.getvalue())
+        (self.root / '.agents').mkdir(exist_ok=True)
+        (self.root / '.agents/stack.json').write_text(json.dumps({'steps': ['test']}))
+        with self.diff_cover() as calls, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.coverage(), 0)
+        diff_cover, = calls
+        self.assertEqual(diff_cover[diff_cover.index('diff-cover') + 1], str(steps.WORK / 'lcov.info'))
+        self.assertNotIn('integration', ' '.join(diff_cover))
+
+    def gate(self):
+        """Run coverage with the real diff-cover, as the script, and return its exit code and its output."""
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
+                              cwd=self.root, capture_output=True, text=True)
+        return done.returncode, done.stdout + done.stderr
+
+    def test_a_line_that_one_report_misses_and_the_other_does_not_measure_still_fails(self):
+        """The code of cfg(not(test)) is in the build of integration only, and that of cfg(test) in test only."""
+        self.commit_one()
+        (self.root / 'src/lib.rs').write_text('a\nb\nc\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 1)], [('src/lib.rs', 3, 0)])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 3', out)
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [('src/lib.rs', 1, 1)])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 2', out)
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [('src/lib.rs', 2, 1), ('src/lib.rs', 3, 1)])
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+
+    def test_the_merged_report_leaves_out_the_generated_files_of_the_parent(self):
+        self.commit_one()
+        (self.root / '.agents').mkdir(exist_ok=True)
+        (self.root / '.agents/generated.txt').write_text('src/gen.rs\n')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'two')
+        (self.root / 'src/gen.rs').write_text('a\n')
+        (self.root / 'src/lib.rs').write_text('a\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/gen.rs', 1, 0)], [('src/lib.rs', 1, 0)])
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        kept = (steps.WORK / 'lcov.info').read_text()
+        self.assertNotIn('gen.rs', kept)
+        self.assertIn('DA:1,1', kept)
 
     def test_with_no_parent_the_lists_are_empty(self):
         (self.root / '.agents').mkdir()
@@ -183,7 +463,7 @@ class Repository(unittest.TestCase):
         self.git('commit', '-q', '-m', 'one')
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            self.assertEqual(steps.coverage('target/llvm-cov/lcov.info'), 1)
+            self.assertEqual(steps.coverage(), 1)
         self.assertIn('write tests', err.getvalue())
 
     def test_test_paths_picks_the_target_of_each_test_file_and_skips_code_files(self):
@@ -209,27 +489,27 @@ class Repository(unittest.TestCase):
         with self.assertRaises(SystemExit):
             steps.test_commands(['loose.rs'])
 
-    def run_tests(self, run, args=(), change=None):
+    def run_tests(self, run, args=(), change=None, step='test'):
         """Stand in for test: begin, a test run that writes the report and may change a file, then stamp."""
         out = io.StringIO()
         with mock.patch.dict(os.environ, {'JLOG_RUN': run} if run else {}), contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(out):
             if not run:
                 os.environ.pop('JLOG_RUN', None)
-            steps.begin(list(args))
-            steps.REPORT.parent.mkdir(parents=True, exist_ok=True)
-            steps.REPORT.write_text('SF:x\nend_of_record\n')
+            steps.begin(step, list(args))
+            steps.report(step).parent.mkdir(parents=True, exist_ok=True)
+            steps.report(step).write_text('SF:x\nend_of_record\n')
             if change:
                 change()
-            steps.stamp()
+            steps.stamp(step)
         return out.getvalue()
 
-    def is_fresh(self, run):
+    def is_fresh(self, run, step='test'):
         out = io.StringIO()
         with mock.patch.dict(os.environ, {'JLOG_RUN': run} if run else {}), contextlib.redirect_stdout(out):
             if not run:
                 os.environ.pop('JLOG_RUN', None)
-            return steps.fresh()
+            return steps.fresh(step)
 
     def commit_one(self):
         (self.root / '.gitignore').write_text('/target/\n')
@@ -248,25 +528,37 @@ class Repository(unittest.TestCase):
         self.run_tests('run-a')
         self.assertTrue(self.is_fresh('run-a'))
         self.run_tests('run-a', args=['parse'])
-        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(steps.saved_run('test').exists())
         self.assertFalse(self.is_fresh('run-a'))
         self.run_tests(None)
-        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(steps.saved_run('test').exists())
         staged = subprocess.run(['git', 'diff', '--cached', '--name-only'], cwd=self.root, capture_output=True,
                                 text=True).stdout
         self.assertEqual(staged, '')
+
+    def test_the_run_of_one_step_leaves_that_of_the_other_alone(self):
+        self.commit_one()
+        self.run_tests('run-a')
+        self.run_tests('run-a', step='integration')
+        self.assertTrue(self.is_fresh('run-a', 'integration'))
+        self.run_tests('run-a', args=['parse'], step='integration')
+        self.assertFalse(self.is_fresh('run-a', 'integration'))
+        self.assertTrue(self.is_fresh('run-a'))
+        out = self.run_tests('run-a', step='integration',
+                             change=lambda: (self.root / 'src/lib.rs').write_text('pub fn x() {}\n'))
+        self.assertIn('integration: a file changed while the tests ran', out)
 
     def test_a_file_changed_while_the_tests_run_drops_the_run(self):
         self.commit_one()
         out = self.run_tests('run-a', change=lambda: (self.root / 'src/lib.rs').write_text('pub fn x() {}\n'))
         self.assertIn('a file changed while the tests ran', out)
-        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(steps.saved_run('test').exists())
         self.assertFalse(self.is_fresh('run-a'))
 
     def test_a_missing_report_is_not_fresh(self):
         self.commit_one()
         self.run_tests('run-a')
-        steps.REPORT.unlink()
+        steps.report('test').unlink()
         self.assertFalse(self.is_fresh('run-a'))
 
     def test_the_folder_target_does_not_count_in_the_tree_even_when_git_sees_it(self):
@@ -274,7 +566,7 @@ class Repository(unittest.TestCase):
         self.git('add', '-A')
         self.git('commit', '-q', '-m', 'one')
         tree = steps.worktree_tree()
-        self.files('target/llvm-cov/lcov.info')
+        self.files('target/llvm-cov/test.lcov')
         self.assertEqual(steps.worktree_tree(), tree)
         self.run_tests('run-a')
         self.assertTrue(self.is_fresh('run-a'))
@@ -287,7 +579,7 @@ class Repository(unittest.TestCase):
             self.assertIsNone(steps.worktree_tree())
         self.assertIn('cannot compute the worktree tree', err.getvalue())
         self.run_tests('run-a')
-        self.assertFalse(steps.RUN.exists())
+        self.assertFalse(steps.saved_run('test').exists())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(self.is_fresh('run-a'))
 

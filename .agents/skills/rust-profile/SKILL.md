@@ -24,11 +24,12 @@ first.
 | none, always there | `setup`, `build` | nothing |
 | `lint` | `fmt`, `fmt-check`, `lint` | the format with rustfmt, and each clippy warning as an error |
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
-| `test` | `test`, `coverage-check`, `test-paths` | the tests, and that the tests run each changed line |
+| `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
+| `integration` | `integration` | the tests of the test targets, such as the files in `tests/` |
 | `docstring` | `docstring-check` | a doc comment on each item, public or private |
 | `toml`, not a default tool | `toml-fmt`, `toml-check` | the format of the TOML files with taplo, and the order of the tables of `Cargo.toml` with cargo-sort |
 
-The first four tools are the default tools. `toml-check` is not a step of the commit gates, so `just verify` runs it and `just check` does not. The base adds `/target/` and
+The first five tools are the default tools. `toml-check` is not a step of the commit gates, so `just verify` runs it and `just check` does not. The base adds `/target/` and
 `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. Every
 report of a step goes to `target/`, so no step leaves a file that git sees.
 
@@ -45,18 +46,25 @@ does not.
   --locked -- -D warnings`.
 - **`typecheck`** runs `cargo check --workspace --all-targets --all-features
   --locked`.
-- **`test`** runs the tests with `cargo llvm-cov test`, and writes the coverage to
-  `target/llvm-cov/lcov.info`.
-- **`coverage-check`** runs `diff-cover` against `HEAD`. It reads the report
-  of `test` only when `test` of the same run of `just`, `JLOG_RUN`, wrote it
-  for the same tree. Otherwise it runs the tests first.
+- **`test`** runs the unit tests, of the libraries and the binaries, with
+  `cargo llvm-cov test`. It writes the coverage to `target/llvm-cov/test.lcov`.
+- **`integration`** runs each test target, such as each file in `tests/`, and
+  each example or bench with `test = true`. It writes the coverage to
+  `target/llvm-cov/integration.lcov`. Neither step runs a target with
+  `test = false`.
+- **`coverage-check`** runs `diff-cover` against `HEAD`, with the reports of
+  `test` and `integration`, merged. A line that one of them runs passes. The
+  report of `integration` counts when `integration` is in the key `steps` of
+  `.agents/stack.json`, and in `provided_steps` when that key is there. With
+  no `.agents/stack.json`, it counts. It reads a report only when its step wrote it in the
+  same run of `just`, `JLOG_RUN`, and for the same tree. Otherwise it runs
+  that step first.
   `diff-cover` compares the coverage report, an LCOV file, with the diff of
   git. The step fails on each changed line, staged, unstaged or untracked,
   that no test runs. It also fails on each changed `.rs` file that is not in
   the report, such as a file in `examples/` or `src/tests/`. The files in the
   folders `tests` and `benches` of a package do not count. On the first commit of a
-  repository, it runs `cargo llvm-cov report --fail-under-lines 100` over all
-  the code.
+  repository, it fails on each line of the reports that no test runs.
 - **`docstring-check`** runs `cargo clippy` with the lints `missing_docs` and
   `clippy::missing_docs_in_private_items`. It prints each item with no doc as
   `FILE:LINE:COLUMN: missing documentation for ...`. It checks the code of
@@ -100,6 +108,9 @@ profile reads a list of files instead:
 - **Extra arguments** go to the tool, for example `just test parse` runs the
   tests whose names hold `parse`. A filtered run writes a partial coverage
   report and saves no run ID. So `coverage-check` then runs all the tests.
+  `just test` runs only the unit tests, and `just integration` runs those of
+  `tests/`. An argument that chooses targets, such as `--test api`, takes the
+  place of the choice of the step.
 
 ## Where the files are
 

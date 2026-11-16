@@ -1,9 +1,11 @@
-"""The helper of the steps of the rust profile: coverage-check, docstring-check and test-paths.
+"""The helper of the steps of the rust profile: test, integration, coverage-check, docstring-check and test-paths.
 
-The recipes in this folder run it with uv: python steps.py coverage LCOV, docs, fresh, begin ARG..., stamp, and
-test-paths PATH.... begin, stamp and fresh tie the coverage report to the run ID JLOG_RUN of the root Justfile and to the
-worktree tree, so that coverage-check reads the report of test only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also
-needs diff-cover, which it runs with uv.
+The recipes in this folder run it with uv: python steps.py run STEP ARG..., fresh STEP, coverage, docs, test-paths
+PATH... and toml. STEP is test or integration. test runs the unit tests, those of the library and the binaries, and
+integration runs the test targets, such as the files of the folder tests. Each writes its own coverage report. The
+run ID JLOG_RUN of the root Justfile and the worktree tree tie each report to its run, so that coverage-check reads a
+report only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also needs
+diff-cover, which it runs with uv.
 
 The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through
 git show HEAD:./PATH, so a commit cannot exempt its own code. With no parent, both lists are empty. git matches
@@ -44,9 +46,15 @@ LINGER = 2
 TEST_RESULT = re.compile(r'^test result: \w+\. (\d+) passed; (\d+) failed;', re.M)
 GENERATED = '.agents/generated.txt'
 COVERAGE_EXCLUDE = '.agents/coverage-exclude.txt'
-REPORT = Path('target/llvm-cov/lcov.info')
-RUN = Path('target/llvm-cov/run.json')
-PENDING = Path('target/llvm-cov/run.pending')
+REPORTS = Path('target/llvm-cov')
+# The steps that write a coverage report.
+COVERED = ('test', 'integration')
+# The kinds of target of cargo metadata that --lib selects.
+LIBRARY = {'lib', 'rlib', 'dylib', 'cdylib', 'staticlib', 'proc-macro'}
+# The tests with coverage, with every feature. run adds the targets of the step and the path of its report.
+COVERAGE = ['cargo', 'llvm-cov', 'test', '--all-features', '--locked', '--include-build-script']
+# The file of jnterfaces whose steps list says whether integration runs in just check.
+STACK = Path('.agents/stack.json')
 DOC_LINTS = ('missing_docs', 'clippy::missing_docs_in_private_items')
 WORK = Path('target/jnprofile-rust')
 
@@ -159,57 +167,225 @@ def worktree_tree():
         Path(str(index) + '.lock').unlink(missing_ok=True)
 
 
-def begin(args):
-    """Save the run ID and the worktree tree before a run of the tests, in target/llvm-cov/run.pending.
+def report(step):
+    """The coverage report of STEP, test or integration: target/llvm-cov/STEP.lcov."""
+    return REPORTS / f'{step}.lcov'
+
+
+def saved_run(step):
+    """The file that ties the report of STEP to its run: target/llvm-cov/STEP.run.json."""
+    return REPORTS / f'{step}.run.json'
+
+
+def pending_run(step):
+    """The file that holds the run of STEP while its tests run: target/llvm-cov/STEP.run.pending."""
+    return REPORTS / f'{step}.run.pending'
+
+
+def begin(step, args):
+    """Save the run ID and the worktree tree before a run of the tests of STEP, in target/llvm-cov/STEP.run.pending.
 
     Only a run of all the tests, with no ARGS, inside a run of just that has JLOG_RUN saves them. Any other run
     saves nothing, so coverage-check runs the tests again. Returns the exit code, always 0.
     """
-    RUN.unlink(missing_ok=True)
-    PENDING.unlink(missing_ok=True)
+    saved_run(step).unlink(missing_ok=True)
+    pending_run(step).unlink(missing_ok=True)
     run = os.environ.get('JLOG_RUN', '')
     tree = worktree_tree() if not args and run else None
     if tree:
-        PENDING.parent.mkdir(parents=True, exist_ok=True)
-        PENDING.write_text(json.dumps({'run': run, 'tree': tree}) + '\n')
+        REPORTS.mkdir(parents=True, exist_ok=True)
+        pending_run(step).write_text(json.dumps({'run': run, 'tree': tree}) + '\n')
     return 0
 
 
-def stamp():
-    """After the tests passed, keep the saved run as target/llvm-cov/run.json when the tree did not change.
+def stamp(step):
+    """After the tests of STEP passed, keep the saved run as target/llvm-cov/STEP.run.json when the tree did not change.
 
     A change to a file while the tests ran means that the report may come from the old code, so the run is dropped.
     Returns the exit code, always 0.
     """
     try:
-        saved = json.loads(PENDING.read_text())
+        saved = json.loads(pending_run(step).read_text())
     except (OSError, ValueError):
         return 0
     finally:
-        PENDING.unlink(missing_ok=True)
+        pending_run(step).unlink(missing_ok=True)
     if isinstance(saved, dict) and saved.get('tree') and saved['tree'] == worktree_tree():
-        RUN.write_text(json.dumps(saved) + '\n')
+        saved_run(step).write_text(json.dumps(saved) + '\n')
     else:
-        print('test: a file changed while the tests ran, so coverage-check runs them again', file=sys.stderr)
+        print(f'{step}: a file changed while the tests ran, so coverage-check runs them again', file=sys.stderr)
     return 0
 
 
-def fresh():
-    """True when the report of the tests comes from this run of just, JLOG_RUN, and from the current worktree tree.
+def counts(step):
+    """True when the report of STEP counts for coverage-check.
+
+    The report of test always counts. That of integration counts when integration is in the steps of just check,
+    the key steps of .agents/stack.json, and an installed tool provides it, the key provided_steps. The setup
+    answer of jnterfaces that runs integration only in just verify takes it out of steps. With no stack.json or no
+    list of steps, the default of the spec holds: integration runs in just check, so it counts.
+    """
+    if step == 'test':
+        return True
+    try:
+        stack = json.loads(STACK.read_text())
+    except (OSError, ValueError):
+        return True
+    listed = stack.get('steps') if isinstance(stack, dict) else None
+    if not isinstance(listed, list):
+        return True
+    provided = stack.get('provided_steps')
+    return step in listed and (not isinstance(provided, list) or step in provided)
+
+
+def fresh(step):
+    """True when the report of STEP comes from this run of just, JLOG_RUN, and from the current worktree tree.
 
     A person can set JLOG_RUN by hand, so the tree must match too. An old run of the same tree is a valid run.
+    A report that does not count for coverage-check needs no run, so it is fresh too.
     """
+    if not counts(step):
+        print(f'coverage-check: {step} is not in the steps of just check, so its report does not count')
+        return True
     run = os.environ.get('JLOG_RUN', '')
     try:
-        saved = json.loads(RUN.read_text())
+        saved = json.loads(saved_run(step).read_text())
     except (OSError, ValueError):
         saved = None
-    if (run and isinstance(saved, dict) and saved.get('run') == run and REPORT.is_file()
+    if (run and isinstance(saved, dict) and saved.get('run') == run and report(step).is_file()
             and saved.get('tree') and saved['tree'] == worktree_tree()):
-        print(f'coverage-check: the tests of this run, {run}, wrote the report, so they do not run again')
+        print(f'coverage-check: the tests of {step} in this run, {run}, wrote the report, so they do not run again')
         return True
-    print('coverage-check: no report of this run and this tree, so the tests run now', flush=True)
+    print(f'coverage-check: no report of {step} for this run and this tree, so the tests run now', flush=True)
     return False
+
+
+def selections(step):
+    """The selections of targets of STEP, from cargo metadata: one list of cargo options for each run of cargo.
+
+    Only a target whose key test is true counts, as for a plain cargo test, so a [[test]] with test = false does
+    not run. test takes the libraries and the binaries. integration takes the test targets, such as the files of
+    the folder tests, and the examples and the benches that set test = true. Each such target is named, with --bin,
+    --test, --example or --bench. cargo looks for a name in each selected package, and a library has no name of
+    its own, only --lib. So one run with --workspace takes them all only when each library is tested and no
+    package has an untested target of a tested name. Otherwise each package gets a run of its own, with
+    --package and the id of the package, since a dependency can have the same name. A step with no target gives
+    no selection.
+    """
+    done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        raise SystemExit(f'{step}: cargo metadata failed')
+    kinds = (('bin', '--bin'),) if step == 'test' else (('test', '--test'), ('example', '--example'),
+                                                         ('bench', '--bench'))
+    chosen, named, skipped, untested_library = [], [], set(), False
+    for package in json.loads(done.stdout)['packages']:
+        library, pairs = False, []
+        for target in package['targets']:
+            tested = target.get('test', True)
+            if step == 'test' and set(target['kind']) & LIBRARY:
+                library = library or tested
+                untested_library = untested_library or not tested
+            for kind, option in kinds:
+                if kind in target['kind']:
+                    if tested:
+                        pairs.append((option, target['name']))
+                    else:
+                        skipped.add((option, target['name']))
+        named += pairs
+        if library or pairs:
+            chosen.append((package['id'], library, pairs))
+    if untested_library or skipped & set(named):
+        return [['--package', name, *(['--lib'] if library else []), *[arg for pair in pairs for arg in pair]]
+                for name, library, pairs in chosen]
+    if not chosen:
+        return []
+    library = any(library for _, library, _ in chosen)
+    return [['--workspace', *(['--lib'] if library else []), *[arg for pair in dict.fromkeys(named) for arg in pair]]]
+
+
+# The options of cargo that select targets, and those that select packages. With one of them in the extra
+# arguments, the arguments choose. The step adds --workspace only when they choose no package.
+TARGETS = ('--lib', '--bin', '--bins', '--test', '--tests', '--example', '--examples', '--bench', '--benches',
+           '--all-targets', '--doc')
+PACKAGES = ('-p', '--package', '--workspace', '--all')
+
+
+def chosen_by(args):
+    """What ARGS, before a --, choose: 'packages' when they name packages, 'targets' for targets only, else None.
+
+    --exclude alone chooses targets: cargo takes it only with --workspace, which the step then adds.
+    """
+    found = None
+    for arg in args:
+        if arg == '--':
+            break
+        name = arg.split('=', 1)[0]
+        if name in PACKAGES or (arg.startswith('-p') and not arg.startswith('--')):
+            return 'packages'
+        if name in TARGETS or name == '--exclude':
+            found = 'targets'
+    return found
+
+
+def merge_lcov(texts):
+    """One LCOV report from the reports TEXTS: a line runs when one report runs it.
+
+    For each source file, a line is in the report when one of TEXTS measures it, and its count is the highest of
+    their counts. diff-cover takes only the lines that each report fails, so it cannot merge reports itself.
+    """
+    counts, path = {}, None
+    for text in texts:
+        for line in text.splitlines():
+            if line.startswith('SF:'):
+                path = line[3:].strip()
+                counts.setdefault(path, {})
+            elif line.startswith('DA:') and path is not None:
+                number, count = line[3:].split(',')[:2]
+                lines = counts[path]
+                lines[int(number)] = max(lines.get(int(number), 0), int(count))
+            elif line.strip() == 'end_of_record':
+                path = None
+    return ''.join(f'SF:{path}\n' + ''.join(f'DA:{number},{count}\n' for number, count in sorted(lines.items()))
+                   + 'end_of_record\n' for path, lines in sorted(counts.items()))
+
+
+def run_tests(step, args):
+    """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
+
+    Each selection of targets runs in its own cargo llvm-cov, with a report of its own, and the step merges them.
+    When ARGS select targets or packages, such as --test api or -p core, they take the place of the selections. With no target for
+    STEP, no test runs and the report is empty. Returns the exit code of the first cargo that fails.
+    """
+    out = report(step)
+    out.unlink(missing_ok=True)
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    for old in REPORTS.glob(f'{step}.part*.lcov'):
+        old.unlink()
+    begin(step, args)
+    try:
+        chosen = chosen_by(args)
+        runs = [[]] if chosen == 'packages' else [['--workspace']] if chosen else selections(step)
+    except SystemExit as error:
+        pending_run(step).unlink(missing_ok=True)
+        print(error, file=sys.stderr, flush=True)
+        return 1
+    if not runs:
+        what = 'test target' if step == 'integration' else 'library or binary'
+        print(f'{step}: the workspace has no {what}, so no test runs and the report is empty', flush=True)
+        out.write_text('')
+        return stamp(step)
+    parts = []
+    for number, selection in enumerate(runs):
+        parts.append(REPORTS / f'{step}.part{number}.lcov')
+        command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
+        print(shlex.join(command), flush=True)
+        code = subprocess.run(command).returncode
+        if code:
+            pending_run(step).unlink(missing_ok=True)
+            return code
+    out.write_text(merge_lcov([part.read_text() for part in parts]))
+    return stamp(step)
 
 
 def changed_code():
@@ -243,32 +419,51 @@ def unreported(changed, lines, excluded):
     return [path for path in changed if path not in lines and not excluded(path) and not test_file(path)]
 
 
-def coverage(lcov):
+def missed_lines(text, root):
+    """Each line that the LCOV report TEXT gives a count of 0, as PATH:LINE relative to ROOT, in order."""
+    missed, path = [], None
+    for line in text.splitlines():
+        if line.startswith('SF:'):
+            path = relative(line[3:].strip(), root) or line[3:].strip()
+        elif line.startswith('DA:') and path is not None:
+            number, count = line[3:].split(',')[:2]
+            if int(count) == 0:
+                missed.append((path, int(number)))
+    return [f'{path}:{number}' for path, number in sorted(missed)]
+
+
+def coverage():
     """Fail on each changed line of code that the tests do not run, as diff-cover against HEAD finds it.
 
+    It reads the report of test, and that of integration when it counts. A line that one of them runs passes.
     The files of generated.txt and coverage-exclude.txt of the parent commit do not count. On the first commit,
-    cargo llvm-cov report checks every line instead, with a limit of 100%. Returns the exit code.
+    every line of the reports must run instead. Returns the exit code.
     """
+    reports = [report(step) for step in COVERED if counts(step)]
+    for path in reports:
+        if not path.is_file():
+            print(f'coverage-check: there is no coverage report {path}, so write tests and run just test',
+                  file=sys.stderr)
+            return 1
+    texts = [path.read_text() for path in reports]
+    root = top()
     if not has_parent():
         print('coverage-check: the first commit, so every line of code must run in the tests', flush=True)
-        code = subprocess.run(['cargo', 'llvm-cov', 'report', '--include-build-script',
-                               '--fail-under-lines', '100']).returncode
-        if code:
-            print('coverage-check: write tests for the lines that the report shows as missed', file=sys.stderr)
-        return code
-    if not Path(lcov).is_file():
-        print(f'coverage-check: there is no coverage report {lcov}, so write tests and run just test',
-              file=sys.stderr)
-        return 1
-    root = top()
+        missed = missed_lines(merge_lcov(texts), root)
+        for line in missed:
+            print(f'{line}: no test runs this line')
+        if missed:
+            print('coverage-check: write tests for the lines that no test runs', file=sys.stderr)
+            return 1
+        return 0
     excluded = matcher(parent_list(GENERATED) + parent_list(COVERAGE_EXCLUDE))
     WORK.mkdir(parents=True, exist_ok=True)
     kept = WORK / 'lcov.info'
-    text = Path(lcov).read_text()
-    kept.write_text(filter_lcov(text, root, excluded))
+    kept.write_text(filter_lcov(merge_lcov(texts), root, excluded))
     code = subprocess.run(['uv', 'run', '--no-project', '--quiet', '--with', DIFF_COVER, 'diff-cover', str(kept),
                            '--compare-branch', 'HEAD', '--include-untracked', '--fail-under', '100']).returncode
-    missing = unreported(changed_code(), reported(text, root), excluded)
+    lines = set().union(*(reported(text, root) for text in texts))
+    missing = unreported(changed_code(), lines, excluded)
     for path in missing:
         print(f'{path}: a changed file that is not in the coverage report, so no test runs it')
     if missing:
@@ -515,22 +710,22 @@ def toml(args):
 
 
 def main(argv):
-    """Run the command of ARGV: coverage LCOV, docs, fresh, begin ARG..., stamp, test-paths [PATH...], or toml [--check]: its exit code."""
-    if len(argv) == 2 and argv[0] == 'coverage':
-        return coverage(argv[1])
+    """Run the command of ARGV and return its exit code: run STEP [ARG...], fresh STEP, coverage, docs,
+    test-paths [PATH...] or toml [--check]. STEP is test or integration."""
+    if len(argv) >= 2 and argv[0] == 'run' and argv[1] in COVERED:
+        return run_tests(argv[1], argv[2:])
+    if len(argv) == 2 and argv[0] == 'fresh' and argv[1] in COVERED:
+        return 0 if fresh(argv[1]) else 1
+    if argv == ['coverage']:
+        return coverage()
     if argv == ['docs']:
         return docs()
-    if argv == ['fresh']:
-        return 0 if fresh() else 1
-    if argv[:1] == ['begin']:
-        return begin(argv[1:])
-    if argv == ['stamp']:
-        return stamp()
     if argv[:1] == ['test-paths']:
         return test_paths(argv[1:])
     if argv in (['toml'], ['toml', '--check']):
         return toml(argv[1:])
-    print('usage: steps.py coverage LCOV | docs | fresh | begin [ARG...] | stamp | test-paths [PATH...] | toml [--check]', file=sys.stderr)
+    print('usage: steps.py run STEP [ARG...] | fresh STEP | coverage | docs | test-paths [PATH...] | toml [--check], '
+          'where STEP is test or integration', file=sys.stderr)
     return 2
 
 
