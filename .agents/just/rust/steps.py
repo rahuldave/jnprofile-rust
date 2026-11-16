@@ -8,7 +8,7 @@ report only in the same run. It needs Python 3.11 or later and no package. The s
 diff-cover, which it runs with uv.
 
 The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through
-git show HEAD:./PATH, so a commit cannot exempt its own code. With no parent, both lists are empty. git matches
+git show HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent without the file, the list is empty. git matches
 their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top of
 the project, which can be a subfolder of the git repository.
 """
@@ -142,8 +142,9 @@ def ignored(path):
 def worktree_tree():
     """The tree hash of every file of the worktree, staged or not, that git does not ignore, or None on an error.
 
-    It uses a temporary index of its own, as the spec of the commit gates says, so neither the real index nor a
-    second run at the same time changes. The folder target of the project never counts. A file that git cannot
+    It starts from HEAD in a temporary index of its own, so neither the real index nor a second run at the same
+    time changes. The tree only ties a report to its run: steps.py compares it with its own trees, never with
+    the tree of jlog or jagt, which start from a copy of the index. The folder target of the project never counts. A file that git cannot
     index, such as a nested repository with no commit, gives None, and git's message goes to the error output.
     """
     WORK.mkdir(parents=True, exist_ok=True)

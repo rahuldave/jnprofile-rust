@@ -21,7 +21,8 @@ The parts of a solution exist, but they are not joined:
 - **GitButler** is in the hooks, skills and docs of agent_gest_git_skills,
   mostly for stacked PRs. The spec drops it.
 - **The Python profile** installs the pre-commit framework, which owns
-  `.git/hooks/pre-commit` and changes files at commit time.
+  `.git/hooks/pre-commit` and changes files at commit time. The spec moves the
+  framework to the tasker role.
 - **jagt** renders and checks task packets for agents. No recipe uses it for a
   review.
 
@@ -60,7 +61,8 @@ The gates stop honest mistakes, for example an agent that forgets the review,
 or a commit with an unstaged fix. They do not stop an agent that tries to
 cheat. An agent with a shell can edit the log, remove the git hook or write a
 commit with `git commit-tree`. The spec makes these acts hard to do by
-accident.
+accident. A commit that skips the gate has no trailer of the gate, so `just
+ci` stops it in CI.
 
 ## Proposed Solution
 
@@ -74,7 +76,7 @@ log and the records, and it runs no step itself.
 
 ```
  person / agent
-     │  just check                         just review | test-review | docs …
+     │  just check                         just review | update-docs …
      ▼                                          ▼
  ┌──── jnterfaces ─────────────────────┐  ┌─ agent_gest_git_skills ───────┐
  │ root Justfile + index: step names,  │  │ target recipes, base tasks    │
@@ -89,9 +91,9 @@ log and the records, and it runs no step itself.
  └──────┬─────────────────┘                      ▼ (jagt-protocol rules)
         ▼                                 fresh agent → AGENT_RESULT
  ┌─ profile modules ───────────────┐             │
- │ python.just, typescript.just,   │             ▼ SubagentStop hook
- │ rust.just → ruff, ty, pytest,   │      writes the record; the jlog
- │ biome, tsc, smalldocs, cargo …  │      plugin gives the model
+ │ python.just: ruff, ty, pytest   │             ▼ SubagentStop hook
+ │ typescript.just: biome, tsc     │      writes the record; the jlog
+ │ rust.just: cargo, clippy …      │      plugin gives the model
  └─────────────────────────────────┘             │
                                                  ▼
  git commit ──► pre-commit hook ──► gate (agent_gest_git_skills)
@@ -139,7 +141,7 @@ anything. When one is missing, it stops and prints the install line.
 Every repository has the same steps, for any language:
 
 ```text
-just check     fmt-check lint typecheck test coverage-check integration docstring-check docs-check prose-check diff-check
+just check     fmt-check lint typecheck test integration coverage-check docstring-check docs-check prose-check diff-check
 ```
 
 - **jnterfaces names the steps.** It holds the list and the meaning of each
@@ -232,8 +234,9 @@ just check     fmt-check lint typecheck test coverage-check integration docstrin
     tools as excludes.
   - **The lists come from the parent.** The steps read `generated.txt` and
     `coverage-exclude.txt` with `git show HEAD:<path>`, so a commit cannot
-    exempt its own code. With no parent, both lists are empty. `test-review`
-    judges each new entry.
+    exempt its own code. With no parent, or when the parent has no such file,
+    `git show` fails and the list is empty. `test-review` judges each new
+    entry.
   - **No tests.** When code changed and there is no report, the step fails and
     says "write tests". When no profile provides `test`, the step is a skip.
   - **The first commit.** With no parent, `diff-cover` cannot run. The step
@@ -385,7 +388,7 @@ The skills ask for the work, and the steps and targets check it.
   tests, and the docs lens of `review` checks the docstrings.
 - **A part of a skill becomes a target only when the gate needs its
   evidence.** The other parts of the skills stay as they are.
-- **The doc pages are the exception.** `just docs` writes the pages that a
+- **The doc pages are the exception.** `just update-docs` writes the pages that a
   change affects, such as the README and the guides. A fresh agent can do that
   work, because it needs the whole change and not the context of one function.
 
@@ -399,7 +402,7 @@ check that a skill runs goes through a recipe, so the run log has it.
 | `gim` | It writes the code, the tests and the docs. It ends with `just check` and the required targets, and it fixes what their findings say. It runs no checks of its own. |
 | `gte` | It says how to write a good test. It runs tests only through `just test`, `just integration` and `just coverage-check`. It holds the base tasks of `test-review` and `visual-check`. |
 | `gfm` | It runs `just fmt`, then the check steps. It names no tool such as ruff or biome, because the profiles own the tools. |
-| `gdo` | It asks the author for a doc on every item, and it reads the output of `docstring-check`. It holds the base tasks of `docs` and `visualize`. |
+| `gdo` | It asks the author for a doc on every item, and it reads the output of `docstring-check`. It holds the base tasks of `update-docs` and `visualize`. |
 | `grv` | It holds the base task of `review`, with the lenses and the docs lens. To run `grv` by hand is to run `just review`. |
 | `gcm` | It commits after the pass and the records. It explains a stop of the gate, asks the person before `record-skip`, and uses stacked PRs with plain git. |
 | `gpa`, `gor` | They use stacks with plain git, the shared log folder, and records from worktrees. |
@@ -433,16 +436,34 @@ Each packet has these parts:
 
 - **The base task** from the skill. For example, `grv` gives the review lenses.
   A lens is one point of view of the review, for example correctness, tests or
-  safety. The file is `references/targets/<target>.md` in the skill.
+  safety. The file is `references/targets/<target>.md` in the skill. The
+  recipe looks for that file in each installed skill, and one skill must have
+  it. So the `nossaifd` skill gives the base task of `prose`, and a target
+  without its skill prints no packet.
 - **The language layer** from `.agents/targets/<language>/<target>.md`, for
   each language in `.agents/stack.json`. Each profile ships its files, as it
-  ships its `just` modules now. For example, the Python file for `docs` can say
+  ships its `just` modules now. For example, the Python file for `update-docs` can say
   "write docments for each argument". A new language needs a new file, and no
   change to any skill.
 - **The repository text** from `.agents/targets/<target>.md`, if the file
   exists. For example, `.agents/targets/review.md` can say "check each SQL
   migration for a rollback".
 - **The inputs:** the diff, the input tree and the arguments of the recipe.
+  The diff compares the worktree with `HEAD`, and holds the files that git does
+  not track yet. It is the file `diffs/<head>-<tree>.diff` in the shared log
+  folder, so the same tree on another `HEAD` gets a file of its own. Before
+  the recipe computes the tree, it makes `.agents/log/.gitignore` with the
+  line `*` if the file is missing. So the run log of `jlog` and the diff file
+  are not in the tree. The recipe stops if `.agents`, `.agents/log`, its
+  `diffs` folder or this file is a link. It opens each folder through the
+  folder above it, so a link that appears later moves nothing. It writes each
+  diff as a new file, so a link or a hard link at its name keeps the other
+  file. In the main checkout, it also stops if `.git` is a link to a folder
+  elsewhere. So it writes nothing outside the repository. From a linked
+  worktree, the main checkout is the folder that holds the real `.git`, as git
+  names it, even when the `.git` of the main checkout is a link.
+- **The allowed actions:** what the fresh agent may do. A target that changes
+  files names them, such as "change the docs that the change affects".
 - **The required outputs:** the fields that the result must have, for example
   `findings` and `status`.
 - **A nonce:** a random value of 32 lowercase hex digits, whose first digit is
@@ -466,18 +487,20 @@ The first agentic targets:
 |---|---|---|
 | `just review` | An adversarial review of the changes, on the strongest model. The docs lens checks that each new or changed doc says what the item is for, that it matches the code, and that it is not a stub. | Findings, each one fixed with a test or with a reason not to fix it. |
 | `just test-review` | Checks that each new behavior has a test, that each new test checks a result, and that each new pragma or exclude has a reason. A new test that passed on the parent commit is a finding, unless the change is a refactor. | Findings, each one fixed with a test or with a reason not to fix it. |
-| `just docs [area]` | Finds the docs that the change affects, and writes or changes them. The repository text says which docs the repository has, for example user docs, developer docs, API docs or a change log. | The changed docs, and the docs it checked and left alone. |
+| `just update-docs [area]` | Finds the docs that the change affects, and writes or changes them. The repository text says which docs the repository has, for example user docs, developer docs, API docs or a change log. | The changed docs, and the docs it checked and left alone. |
 | `just prose [path]` | Applies the nossaifd guide to the changed pages and docstrings, beyond `check.py`: the plain-writing pass and the pass that removes the habits of model writing. | The changed pages, and the lint output after the change. |
 | `just visual-check [url-or-flow]` | Runs the app, goes through the flow in a browser and takes screenshots. | The screenshots, shown to the person, and a pass or fail for each step of the flow. |
 | `just visualize [topic]` | Draws a diagram of a part of the code, for a doc or for the person. | The diagram file and the doc that shows it. |
 
-Before it writes its packet, the `test-review` recipe runs a logged line,
-`test-parent`:
+Before it writes its packet, the `test-review` recipe runs the recipe
+`test-parent`, through `.agents/skills/gcm/scripts/test_parent.py`:
 
 - It makes a worktree of the parent commit in a temporary folder outside the
   repository, with `git worktree add --detach`.
-- It copies each added or changed test file in, runs the `test-paths` recipe
-  of the profile on them, and removes the worktree.
+- It copies each added or changed test file in, runs the recipe
+  `<language>::test-paths` of the parent on each file alone, and removes the
+  worktree. A file that does not build cannot hide a file that passes. A
+  parent with no such recipe gives "the runner failed".
 - **Test files.** Each profile names its test files with the globs of the key
   `tests` of `profile.json`. `test-parent` copies only those files, so no
   new code reaches the parent.
@@ -498,13 +521,19 @@ Before it writes its packet, the `test-review` recipe runs a logged line,
   - 1: a test failed, or a test did not build. A new test of new code often
     does not build on the parent, and that is a failure of the test.
   - 5: no test ran, as pytest exits when it collects no test. An example is
-    a file whose tests are all skipped. `test-paths` with no path exits with
+    a file whose tests are all skipped. An xfail test, which is expected to
+    fail, does not count as a test that ran. `test-paths` with no path exits with
     5 too, and it never runs all the tests.
-  - Any other code: the runner itself failed, for example with a usage error
-    or a crash.
-- **Each profile counts the tests.** It reads the count from the output of
-  the runner, such as the summary line of pytest or the lines "running N
-  tests" of cargo. A count of 0 gives 5, even when the runner exits with 0. A
+  - Any other code: the runner itself failed, for example with a usage error,
+    a crash, or an install of the environment that fails. A test that ends
+    the run, as with `os._exit(0)`, gives this code too.
+- **One line for each test.** The output of `test-paths` names each test and
+  its result. In a file with a test that fails, a test that passes gives no
+  case of its own, so `test-review` reads those lines.
+- **Each profile counts the tests.** It reads the count from a report or
+  the output of the runner, such as the JUnit report of pytest or the lines
+  "running N tests" of cargo. A plugin can change the terminal output of
+  pytest, so the Python profile reads the report. A count of 0 gives 5, even when the runner exits with 0. A
   runner that exits with 5 for another reason, such as a fatal error of Node,
   gets 2. vitest exits with 1 when a test fails, and also when it finds no
   test file. So the profile reads its output to tell the two apart.
@@ -515,11 +544,19 @@ Before it writes its packet, the `test-review` recipe runs a logged line,
   expected failure. 5 is "no test ran on the parent", and `test-review`
   judges those tests from the diff. Any other code is "the runner failed",
   which is neither a pass nor a failure.
+- **Two limits of the Python profile.**
+  - pytest finds its config from the test files that it runs. So a
+    `pytest.ini` in the folder of a test file takes the place of the config
+    of the project, as it does when you run pytest on that file yourself.
+  - `test-parent` stops the process group of each run. A test that leaves
+    its group, as with `setsid`, can outlive the run.
 - It writes the result, with the output of the tests, to
-  `test-parent/<run>.json` in the log folder. The result names the case. It
-  exits with 0 in each case above. It exits with 1 only when `test-parent`
+  `test-parent/<tree>.json` in the log folder. `<tree>` is the worktree tree,
+  as the gate computes it, so the packet of `test-review` for that tree
+  finds it. The result names the case. It exits with 0 in each case above. It exits with 1 only when `test-parent`
   itself fails. Examples are a worktree that git cannot make, a copy that
-  fails, and a log file that it cannot write.
+  fails, and a log file that it cannot write. On SIGTERM, SIGHUP or Ctrl-C it
+  stops the tests and removes the worktree before it exits.
 - The packet holds the result. So the run is logged, and the agent only judges
   it.
 - On the first commit, `test-parent` is a skip.
@@ -538,6 +575,11 @@ Two recipes have the name `prose` now, and both change:
   must run with no argument, as each step does.
 
 So `prose` is free for the agentic target.
+
+The target that writes docs is `update-docs`, not `docs`. Many repositories
+have a recipe `docs` that previews the docs site, as the `docs` tool does. A
+role file that also had `docs` would stop each Justfile that imports it,
+because `just` refuses a recipe that two files define.
 
 Other targets to consider later:
 
@@ -586,10 +628,10 @@ only place for them.
   packet was made. The output tree is the worktree tree when the fresh agent
   stopped, after its changes. A target that changes no file has the same tree
   twice.
-- **The chain.** `docs` and `prose` change files, so the gate accepts a chain:
+- **The chain.** `update-docs` and `prose` change files, so the gate accepts a chain:
 
   ```text
-  docs         T0 -> T1
+  update-docs  T0 -> T1
   prose        T1 -> T2
   test-review  T2 -> T2
   review       T2 -> T2
@@ -597,8 +639,8 @@ only place for them.
   ```
 
   Each record must start at the output tree of the record before it. The last
-  tree must be the commit tree. A `docs` record comes before a `prose` record,
-  because `prose` checks the text that `docs` wrote. `test-review` and `review`
+  tree must be the commit tree. An `update-docs` record comes before a `prose` record,
+  because `prose` checks the text that `update-docs` wrote. `test-review` and `review`
   come after the last record that changes files. When a review leads to fixes, the fixes make a
   new tree, and the review runs again on it. `test-review` and `review` change
   no files, so they can run in either order on the same tree.
@@ -628,6 +670,20 @@ only place for them.
   skill. The packet holds the path of its worktree, so the hook computes the
   tree in the right checkout.
 - **The gate reads only records.** It does not know which harness made them.
+- **The file of a record** is a JSON file in `records/`, with these keys:
+
+  | Key | What it holds |
+  |---|---|
+  | `version` | `1`. |
+  | `target` | The name of the target, for example `review`. |
+  | `status` | The status of the result. Only `success` counts. |
+  | `input_tree`, `output_tree` | The two trees of the record. |
+  | `findings` | A list. Each finding has a `summary`, and a `test` that shows the fix or a `reason` not to fix it. |
+  | `source` | `hook`, `agent` for `just record`, or `skip` for `just record-skip`. |
+  | `reason` | For a skip, the reason. A skip has the same tree twice. |
+  | `model`, `nonce` | The model of the fresh agent, and the nonce of its packet. |
+
+  The gate is `.agents/skills/gcm/scripts/commit_gate.py`.
 - **Who writes a record** depends on the adapter of the harness:
 
   | Harness | How the result becomes a record |
@@ -636,10 +692,23 @@ only place for them.
   | Codex | The same as Claude Code. Codex 0.163 has the hooks `SubagentStart` and `SubagentStop`, with `agent_transcript_path` and `last_assistant_message`. Codex runs the hooks of a project only after the person trusts them. |
   | An older Codex, or any other harness | The agent that ran the target runs `just record <target> <file>`, and the record is marked `"source": "agent"`. |
 
-  A harness with a hook that writes records stops `just record`, so its agents
-  cannot write a record by hand.
+  In Claude Code, `just record` stops, because the hook writes the records.
+  The script cannot tell whether a Codex has the hook, so in Codex
+  `just record` checks the result instead. An agent can clear the variables
+  of its harness, so they cannot say that no harness runs.
+- **A repository with the record hook.** There, `just record` without
+  `CODEX_THREAD_ID` stops. The hook can be in `.claude/settings.json`, `.claude/settings.local.json`,
+  `.codex/hooks.json` or `.codex/config.toml`. The script reads them in the
+  checkout where it runs and in the main checkout, and the guard protects
+  both. It also reads the settings of the person in `~/.claude` and
+  `~/.codex`.
 - **The check of a `just record`** in Codex reads the transcript of the fresh
-  agent, a JSONL file:
+  agent, a JSONL file in the `sessions` folder of `CODEX_HOME`, by default
+  `~/.codex/sessions`. The record takes the result from the transcript, not
+  from the file of the agent:
+  - A forked agent is not a fresh agent. Its transcript holds the turns of
+    its parent, so the check refuses a transcript with `forked_from_id` or
+    with more than one `session_meta` line.
   - Its `session_meta` line names the parent thread in `parent_thread_id`. The
     parent must be the thread that ran `just record`, from `CODEX_THREAD_ID`.
   - One fresh agent can have several turns. The nonce must be in the
@@ -651,6 +720,52 @@ only place for them.
     `state_5.sqlite-shm`.
 - **A skip with a reason.** `just record-skip <target> <reason>` lets one tree
   through without that record. The agent hooks ask the person before it runs.
+  Codex has no question for a hook, so there the hook stops the command, and
+  the agent asks the person to run it.
+- **One result, one record.** The record of a packet is
+  `records/<nonce>.json`, and a second result of the same packet gives no
+  record. The findings must be a list in `outputs.findings`, or the result
+  gives no record.
+- **The guard of the records.** The gate guard stops these calls:
+  - `record_result.py hook`, which only the harness runs.
+  - `just record` in Claude Code. The guard finds the recipe after the
+    options of just, and it reads the options from `just --help`.
+  - A record command that sets or unsets `CLAUDECODE`,
+    `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` or `CODEX_HOME`, or that
+    runs with `env`, `exec`, `unset` or `export -n`. Those programs can
+    clear the variables without their names.
+  - A write to the `sessions` folder of Codex.
+  - A write to `.git/config`, where a `core.hooksPath` would move the hooks.
+  - A commit while git has a `core.hooksPath`. The guard asks git once, in
+    the folder of the command. Then git would not run the gate.
+  - Any git line when the guard itself fails. A line without git runs.
+- **The limits of the records.** The guard reads the words of a line. It
+  does not run the shell in its head, so a command that hides git runs:
+  - A program such as `python -c`, or a script, can commit or write a file
+    in `records/`.
+  - A here-doc or a pipe into a shell, as in `bash <<EOF`, runs. So does a
+    word that the shell makes, as in `git $(echo commit) -n`.
+  - A setting that a command writes first, as in `~/.gitconfig`, can give
+    git a `core.hooksPath` that the guard does not see.
+  - A record hook in a setting that the script does not read, such as the
+    managed settings or a plugin of Codex, does not stop `just record`.
+  - In a repository with no record hook, `just record` takes the result
+    from the file of the agent.
+  - In Codex, a command that sets `CODEX_HOME` in a way the guard does not
+    see can point the check at transcripts that the agent wrote.
+  - A parent can tell a fresh agent to repeat a result that the parent wrote.
+  - When the parent changes the worktree while a fresh agent runs, its
+    changes are in the output tree of that record.
+
+  A commit that went around the gate has no trailer of the gate, so `just ci`
+  stops it. The section "The trailer and just ci" tells how. A record that an
+  agent wrote by hand gets through. The review of the pull request is the
+  check of that.
+- **The scripts.** `.agents/skills/gcm/scripts/record_result.py` writes the
+  records. The hook `record-result.sh` runs it on `SubagentStop`. The recipes
+  `record` and `record-skip` run it with `uv`, with pyyaml for the result
+  block. The hook never stops the fresh agent. A result that gives no record
+  only prints the reason.
 
 ### The run log
 
@@ -748,6 +863,17 @@ one JSON line to the run log:
   starts no download, and its failure never fails the line.
 - **The gate is a plain script, not a recipe.** So nothing runs on its own
   inside the git hook.
+- **The sandbox of Codex.** In the mode `workspace-write`, Codex keeps
+  `.agents/` and `.git/` read-only, also under a writable root of the folder
+  above them. So `just check` cannot write its run log, the targets cannot
+  write their packets, and `git commit` cannot write the git folder. The
+  person approves these commands outside the sandbox. Or the person gives
+  each of these folders as a `sandbox_workspace_write.writable_roots` entry.
+  The folders are `.agents` and `.git` of the main checkout, and in a
+  worktree also its `.agents` and its git folder, from
+  `git rev-parse --git-dir`. On 2026-11-16, with Codex 0.167.2, a
+  `codex exec` commit in a main checkout checked the two roots of the main
+  checkout. Probes with `codex sandbox` checked the four roots of a worktree.
 
 **Which session.** Each harness shows its session in a different way:
 
@@ -828,17 +954,33 @@ So these rules apply:
 ### The worktree tree
 
 The gates compare trees. An agent leaves its changes unstaged, so the trees
-come from the worktree, not from the index. `jlog` computes the worktree tree
-with a temporary index:
+come from the worktree, not from the index. The gate and the agentic targets
+compute the worktree tree as below, and `jlog` and `jagt` also start from a
+copy of the index:
 
 ```sh
-GIT_INDEX_FILE=<tmp> git read-tree HEAD
-GIT_INDEX_FILE=<tmp> git add -A
-GIT_INDEX_FILE=<tmp> git write-tree
+cp -p .git/index <tmp>/index                  # keeps the time of the index
+GIT_INDEX_FILE=<tmp>/index git add -A
+GIT_INDEX_FILE=<tmp>/index git write-tree
 ```
 
-`GIT_INDEX_FILE` names the index file that git uses. With a temporary file, the
-real index does not change. Files that git ignores are not in the tree.
+- **The index file.** `GIT_INDEX_FILE` names the index file that git uses.
+  With a copy, the real index does not change. The copy keeps the time of the
+  index, so git still checks the content of a file that changed in the same
+  second as the index.
+- **The files of the index.** A file that the index holds is in the tree,
+  also when `.gitignore` names it. Other files that git ignores are not in the
+  tree.
+- **Entries that git does not check.** When an entry of the index is
+  assume-unchanged or skip-worktree, the copy starts from `HEAD` with
+  `git read-tree HEAD` instead.
+- **The object store.** New objects go into a temporary object store.
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` names the real store, so git reads the
+  old objects from it, and from the stores that the person already named
+  there. Git splits that list at each `:`, so a path with `:`, `"` or `\`
+  goes in double quotes.
+- **No shared index.** The setting `core.splitIndex=false` comes from the
+  environment, so a split index leaves no new shared index file.
 
 At commit time, the commit tree must equal the worktree tree. So all changes
 must be staged:
@@ -846,15 +988,15 @@ must be staged:
 - **All changes staged.** The commit tree equals the worktree tree, and the
   gates go on.
 - **Part of the changes staged.** The commit stops. The gate prints the fix.
-  Run `git stash --keep-index -u`, then `just check`, then commit, then
-  `git stash pop`.
+  Run `git stash --keep-index -u`, then the targets that the new tree needs
+  and `just check`, then commit, then `git stash pop`.
 
 ### The pass
 
 The last line of `check` is `jlog pass`:
 
 ```just
-check: fmt-check lint typecheck test coverage-check integration docstring-check docs-check prose-check diff-check
+check: fmt-check lint typecheck test integration coverage-check docstring-check docs-check prose-check diff-check
   jlog pass
 ```
 
@@ -891,30 +1033,53 @@ check: fmt-check lint typecheck test coverage-check integration docstring-check 
      `CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID`.
   5. It stops the commit and says which target or step to run.
 - **The pre-merge-commit hook** runs the same gate for `git merge`.
-- **The pre-commit framework.** The Python profile installs the pre-commit
-  framework, which owns `.git/hooks/pre-commit`:
-  - The gate becomes a `local` hook in `.pre-commit-config.yaml`, for the
-    stages `pre-commit` and `pre-merge-commit`. The config sets
-    `default_install_hook_types` to both stages, so that `pre-commit install`
-    installs both hooks.
-  - The config drops the three hooks that change files. They are
-    `ruff-format`, `trailing-whitespace` and `end-of-file-fixer`. `fmt-check` and `diff-check`
-    cover them.
-  - The framework stashes the unstaged changes before its hooks run. So in a
-    Python repository, the gate sees partial staging as a tree that does not
-    match, not as unstaged changes. The message is the same.
-  - The `lint` tool runs `pre-commit uninstall` when it is removed. The spec
-    changes this. When `lint` is removed, the installer writes the plain hook
-    in place of the framework hook, so the gate stays.
-  - A repository without the framework gets a plain `.git/hooks/pre-commit` and
-    `.git/hooks/pre-merge-commit`.
+- **The pre-commit framework.** The tasker role installs the framework and
+  owns `.pre-commit-config.yaml`. No profile installs it, so Python,
+  TypeScript and Rust repositories have the same hooks. A project without the
+  tasker role has no gate and no framework.
+  - The config has three `local` hooks:
+    - `commit-gate` runs the gate for the stages `pre-commit` and
+      `pre-merge-commit`.
+    - `commit-gate-trailer` runs the gate again for the stage `commit-msg`,
+      and adds the trailer `Commit-Gate:` to the message.
+    - `just-ci` runs `just ci` for the stage `pre-push`. So a push checks
+      on your machine what CI checks, and a commit without a trailer stops
+      before it reaches GitHub.
+  - The config also has the checks of `pre-commit-hooks` that change no
+    file, such as `check-yaml` and `detect-private-key`, for a commit only.
+  - The config has no hook that changes files, such as `ruff-format`,
+    `trailing-whitespace` or `end-of-file-fixer`. `fmt-check` and
+    `diff-check` cover them.
+  - The role names two programs in `install_extras.programs` of its
+    `skill-package.json`. The first is pre-commit itself, which
+    `uv tool install` puts in the home folder. The second is the hooks.
+    `commit_gate.py --check-hooks` checks the four hooks and the hooks of
+    the config, and
+    `pre-commit install` with a `--hook-type` for each of `pre-commit`,
+    `pre-merge-commit`, `commit-msg` and `pre-push` installs them. jnterfaces installs the programs of a role after its
+    files.
+  - The framework stashes the unstaged edits of tracked files before its
+    hooks run. So the gate sees them as a tree without a pass, not as
+    partial staging. The framework sets `PRE_COMMIT=1` for its hooks, so then
+    the stop also gives the stash fix. Untracked files stay in place, so they
+    give the stop of partial staging.
+  - `--check-hooks` needs the hook `commit-gate` in the stages `pre-commit`
+    and `pre-merge-commit`, so that `git merge` runs the gate too.
+  - The removal of the tasker role runs `pre-commit uninstall` for the four
+    hooks, because a hook without its config stops each commit.
+  - The removal of a profile tool, such as `lint`, does not touch the hooks.
+  - **When pre-commit cannot install.** Outside a Git repository, the check
+    of the hooks passes, and the first `just install` after `git init`
+    installs them. With `core.hooksPath` set, as husky sets it, pre-commit
+    refuses to install. The check then passes and prints the command of the
+    gate, so that you can run the gate from the hooks of that folder.
 - **The required targets** are in `.agents/targets/required.txt`. Each line
   names a target and the paths that make it required:
 
   ```text
   review       **
   test-review  @code
-  docs         @pages  @api
+  update-docs  @pages  @api
   prose        @pages  @api
   ```
 
@@ -928,32 +1093,60 @@ check: fmt-check lint typecheck test coverage-check integration docstring-check 
   - **`@pages`** names the files that `is_page` of nossaifd accepts. So
     `AGENTS.md` and `CHANGELOG.md` need no `prose` record. Without the
     `nossaifd` role, `@pages` is `**/*.md` and `**/*.qmd`.
+    - The gate reads `is_page` from `.agents/skills/nossaifd/scripts/prose_gate.py`
+      in the parent commit, as it reads `required.txt`. So a change cannot
+      loosen the rule for its own pages. The first commit has no parent, so
+      the globs apply to it.
+    - The rule runs in a Python of its own. It gets the changed paths and
+      gives back the pages. So it cannot end the gate or change its
+      environment.
+    - The commit stops when the rule does not load, has no `is_page`, fails,
+      ends before it checks each path, or gives back a path that the commit
+      does not change. The message names the Python of the gate, because a
+      rule can need a newer Python.
   - **`@code`** names the source files of each language in `.agents/stack.json`.
     Each profile gives its globs under the key `code` of `profile.json`, for
     example `**/*.py`, `**/*.ts` or
     `**/*.rs`. The installer copies them into the key `code` of
     `.agents/stack.json`, for each profile. With no profile, `@code` is empty.
-  - **Which file counts.** The gate reads `required.txt`, `.agents/stack.json`
-    and `.agents/generated.txt` from the parent of the commit, so a commit
-    cannot change the lists for itself. On the first commit of a repository,
-    the gate uses the default `required.txt` and the `.agents/stack.json` of
-    the commit, and `generated.txt` is empty.
+  - **Which file counts.** The gate reads `required.txt` and
+    `.agents/generated.txt` from the parent of the commit, so a commit cannot
+    change the lists for itself. With no parent, or a parent without the file,
+    the gate uses the default `required.txt` and an empty `generated.txt`.
+  - **The steps come from the commit.** `jlog pass` reads the steps of the
+    worktree, so the gate reads them from the `.agents/stack.json` of the
+    commit. A commit can then remove a tool and its step, and its review sees
+    the change.
+  - **`@code` takes both lists.** It has the code globs of the commit and of
+    the parent. So a commit that removes a language still needs `test-review`
+    for its code.
+  - **An amend** replaces the last commit. The gate looks for `--amend` in
+    the command line of git, with `ps`. A message can hold the same word, so
+    the gate then applies the rules of both HEAD and its parent, and the
+    stricter rules win.
+  - **A bad line cannot land.** The gate also reads the `required.txt` of the
+    commit, and stops a line that it cannot read. A bad list in the parent,
+    from before the gate, gives way to the default list.
   - **Which changes count.** The gate compares the commit tree with the parent
     of the commit.
   - **Rules:**
     - Every commit needs a `review` record.
     - A commit that changes code needs a `test-review` record.
-    - A commit with a docs file needs a `docs` record and a `prose` record.
+    - A commit with a docs file needs an `update-docs` record and a `prose` record.
     - A commit that changes a module of the API pages needs the same two
       records. Its docstrings become text on the website.
     - A change to other code needs neither record.
-- **The agent hooks** of each harness do not check records. They parse the
-  hook input with `jq`, not `sed`, so a quoted message does not hide a flag. In
-  Codex, a `PreToolUse` hook that exits with 2 stops the command. The hooks stop
-  these commands as a best effort:
+- **The agent hooks** of each harness do not check records. The gate guard,
+  `.agents/skills/gcm/scripts/gate_guard.py`, parses the hook input as JSON
+  and splits the command into words as a shell does, so a quoted message does
+  not hide a flag. In Claude Code and in Codex, a `PreToolUse` hook that exits
+  with 2 stops the command. The guard stops mistakes. It is not the lock,
+  because a shell has too many ways to hide a command. The lock is the
+  trailer of the gate. The hooks stop these plain commands:
   - `--no-verify`, and `-n` with `commit`.
   - `core.hooksPath`, `git commit-tree` and `git update-ref`.
-  - `just record`, in a harness with a hook that writes records.
+  - `just record-skip`, until the person agrees. In Claude Code the hook asks
+    the person. In Codex it stops the command.
   - A write to a log folder, `.git/hooks`, `required.txt` or the settings of
     the hooks.
 - **Other commands that make commits:**
@@ -964,6 +1157,57 @@ check: fmt-check lint typecheck test coverage-check integration docstring-check 
   | `git merge` | The pre-merge-commit hook. |
   | `git rebase`, `git cherry-pick`, `git revert` | Allowed. A lab checks which trees they make. |
 
+- **The trailer and just ci.** The gate stamps each commit that it passes,
+  and CI checks the stamps:
+  - **The trailer.** The `commit-msg` hook runs the gate once more. Then it
+    adds `Commit-Gate: patch:<patch-id>` to the message. A merge gets
+    `Commit-Gate: tree:<tree>`.
+  - **The patch ID** is the hash of the change, from `git patch-id
+    --verbatim`, which keeps the spaces of each line. The diff has no lines of
+    context, so a rebase with no conflict keeps the ID, and a restacked branch
+    still passes. An added line that moves within one part of a file keeps
+    the ID too. The trailer is a claim, so that cost is fair. A file of `git add -N`
+    is not in the ID, since the commit does not hold it.
+  - **An amend.** For what looks like an amend, the trailer names the patch
+    IDs against both possible parents. When HEAD is a merge, it names the
+    tree too, since the amend is a merge.
+  - **A skip shows.** `git commit -n` skips the `commit-msg` hook too. So a
+    commit that went around the gate has no trailer.
+  - **`just ci`** runs `ci-gate`, then the steps in the list `ci` of
+    `.agents/stack.json`. jnterfaces writes the recipe `ci`, and the tasker
+    role gives `ci-gate`. Without the role, `ci-gate` only says that there
+    is no gate.
+  - **`ci-gate`** runs `commit_gate.py --trailers` on each commit of a
+    range. Each commit needs a trailer that names its own patch ID, or its
+    own tree for a merge. The range comes from the first of these that is
+    there:
+    1. `JN_CI_BASE` and `JN_CI_HEAD`, which CI sets.
+    2. `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`, which the pre-push
+       hook sets for a push to a branch that the remote has.
+    3. `PRE_COMMIT_LOCAL_BRANCH` alone, for a push of a new history. Each
+       commit of the branch counts.
+    4. By hand, the upstream of the branch, or else `origin/HEAD`. With
+       neither, `ci-gate` fails and says to set `JN_CI_BASE`.
+  - **Limits of the pre-push hook.**
+    - The framework reads only the first branch of a push. So
+      `git push origin a b` checks the commits of `a`. CI checks each pull
+      request.
+    - A push to a new, empty remote checks each commit of the branch. A
+      repository with commits from before the gate needs
+      `git push --no-verify` for that push.
+  - **Commits that git makes without the hooks.** `git revert --no-edit`
+    runs no `commit-msg` hook, and a squash of `git rebase --autosquash`
+    keeps the old trailer. Each one stops the push until
+    `git commit --amend --no-edit` gives it a new trailer.
+  - **CI is a part of `just check`.** A step in the list `ci` must be a step
+    of `just check`. The installer leaves out any other name and says so.
+    The default list is empty. Put a step in it only when a clean machine
+    tells you more than your own machine, for example a test on Linux.
+  - **No agent runs in CI.** The fresh agents run before each commit, on
+    the machine of the person. CI reads only their trailers.
+  - **The limit.** A trailer is a claim of the gate, not a proof. An agent
+    can type one by hand. The review of the pull request is the check of
+    that.
 - **The cost.** The agent runs `just check` before it commits, and the gate
   only reads the pass. Integration tests stay in `just check` by default, so a
   slow suite makes each commit slow. The setup question `integration` can move
@@ -1007,8 +1251,8 @@ adds to:
 | `.gitignore` | jnterfaces | The line `.agents/log/`. |
 | `.worktreedisposable` | jnterfaces | The line `.agents/log/`. |
 | `.gitignore` | Each profile | The paths of its caches and coverage reports. |
-| `.agents/generated.txt`, `.agents/coverage-exclude.txt` | jnterfaces writes them empty | The person or the agent adds paths, and `test-review` judges each one. |
-| `.pre-commit-config.yaml` | The tasker role | A `local` hook that runs the gate. The writer keys the entries of `repos` by `repo`, so all `local` entries share one key. `formats.json` changes to key a `local` entry by the `id` of its hook. |
+| `.agents/generated.txt`, `.agents/coverage-exclude.txt` | jnterfaces writes them empty, once, in a project that it started | The person or the agent adds paths, and creates the file when it is missing. `test-review` judges each one. A project with a Justfile of its own gets neither file, and a missing list counts as empty. |
+| `.pre-commit-config.yaml` | The tasker role | The `local` hooks of the gate and of `just ci`, and the checks of `pre-commit-hooks` that change no file. The writer keys the entries of `repos` by `repo`. So a `local` entry of the project takes the place of the entry of the role, and `commit_gate.py --check-hooks` fails and says to copy the hooks of the role into it. |
 | `.claude/settings.json` | The tasker role | The hooks `SessionStart`, `SubagentStop` and `PreToolUse`. The hooks of GitButler go: `Stop` with `gitbutler-snapshot.sh`, and `gitbutler-vcs-context.sh`. |
 | `.codex/hooks.json` | The tasker role | The hooks `SessionStart`, `SubagentStop` and `PreToolUse`. The GitButler hooks and text go. |
 | `.claude/settings.json`, `.codex/hooks.json` | The `nossaifd` role | The turn gate of nossaifd, `UserPromptSubmit` and `Stop`, as now. |
@@ -1019,6 +1263,23 @@ The `nossaifd` role also writes `.github/workflows/nossaifd-prose.yml`, as a
 role is installed, `just check` in CI runs `prose-check`. So the installer
 removes that file, whichever entry wrote it, and does not write it again while
 the tasker role is installed.
+
+The tasker role writes the CI job, `.github/workflows/check.yml`, as a
+`starter` only. It is a whole file, and it is yours from then on. An older
+installer takes a `seed` out on removal, so the job has no `seed`. The tasker
+role ships it only after jnterfaces writes the `check` recipe:
+
+- **The events.** It runs on each pull request. It does not use
+  `pull_request_target`, which would give the code of the pull request the
+  secrets of the repository.
+- **The history.** The checkout has `fetch-depth: 0`, so `ci-gate` can read
+  each commit. It checks out the head of the pull request. The merge commit
+  that GitHub makes has no trailer.
+- **The tools.** It installs `just`, `uv`, and `jlog` at a tagged release. The
+  person adds the setup of the tools of a language that the runner lacks.
+- **The run.** It runs `just ci` on the committed files, and not
+  `just install`. An install can change tracked files. It gives `ci-gate`
+  the base of the pull request in `JN_CI_BASE`.
 
 The run log, the packets and the records are not pieces. The runs write them,
 in the log folders.
@@ -1035,7 +1296,7 @@ in the log folders.
 | The real steps of TypeScript, with eslint for `docstring-check` | jnprofile-typescript |
 | The real steps of Rust, and later its `api` tool | jnprofile-rust, a new repository |
 | The language layer of the packet text, the `@code` globs, and the `tests` globs with the exit codes of `test-paths` | each profile |
-| The names `coverage-check` and `docstring-check`, as no-op steps, and the empty `.agents/generated.txt` and `.agents/coverage-exclude.txt` | jnterfaces |
+| The names `coverage-check` and `docstring-check`, as no-op steps, and, in a project that jnterfaces started, the empty `.agents/generated.txt` and `.agents/coverage-exclude.txt` | jnterfaces |
 | The entry `rust` in the `profiles` of `stack.json` | jnterfaces |
 | The `test-paths` recipe of each profile | each profile |
 | The line `export JLOG_RUN` in the root Justfile, and not in a module | jnterfaces |
@@ -1048,6 +1309,7 @@ in the log folders.
 | The removal of `nossaifd-prose.yml` when the tasker role is installed, and the rule that keeps a reinstall from writing it again | jnterfaces, in the installer |
 | `jlog`, and the plugins, one folder and one uv project for each harness | jlog |
 | The gate, the git hooks, the agent hooks, the agentic targets with their base tasks, `just record` | agent_gest_git_skills |
+| The CI job `.github/workflows/check.yml`, a starter of the tasker role that runs `just check` | agent_gest_git_skills |
 | The removal of GitButler from the hooks, the skills and the docs | agent_gest_git_skills |
 | Stacked PRs with plain git, in the `gcm`, `gpa` and `gor` skills | agent_gest_git_skills |
 | The changes to the skills, in the section "The skills" | agent_gest_git_skills |
@@ -1075,7 +1337,7 @@ needs it.
 - `set shell` in the files that the installer generates.
 - The `docs` tool and the `api` tool, and an entry for the smalldocs config in
   `formats.json`.
-- The agentic targets `review`, `test-review`, `docs`, `prose`,
+- The agentic targets `review`, `test-review`, `update-docs`, `prose`,
   `visual-check` and `visualize`, with the language layer, the repository text
   and the nonce.
 - The steps `coverage-check` and `docstring-check` in each profile.
@@ -1142,9 +1404,9 @@ needs it.
 **Records:**
 
 - An agent commit with no review record for the tree stops.
-- The chain docs, prose, test-review, review and check passes, and so does
+- The chain update-docs, prose, test-review, review and check passes, and so does
   the chain with `review` before `test-review`. A chain with `prose` before
-  `docs` stops.
+  `update-docs` stops.
 - A record with status `failed`, or with a finding that is not fixed, does not
   count.
 - A review by a fresh agent in another worktree gives a record that the gate
@@ -1189,8 +1451,8 @@ needs it.
 - An empty `required.txt` in the commit does not remove the review.
 - A test suite that runs git in temporary repositories does not break the
   commit, because the gate does not run the steps.
-- In a Python project, the gate runs as a local hook of the pre-commit
-  framework, and removing the `lint` tool keeps the gate.
+- In a Python, a TypeScript and a Rust project, the gate runs as a local hook
+  of the pre-commit framework. Removing the `lint` tool keeps the gate.
 
 **The turn gate of nossaifd:**
 
@@ -1203,6 +1465,18 @@ needs it.
   it, the file stays as now.
 - A reinstall of nossaifd after the tasker role does not bring back
   `nossaifd-prose.yml`.
+- With the tasker role, the project gets `.github/workflows/check.yml`. Its
+  job checks out the head of the pull request with `fetch-depth: 0` and runs
+  `just ci`. A commit with no trailer of the gate fails it. A CI file of the
+  person stays as it is, and the file stays after `just uninstall`.
+- Each commit that passes the gate gets a `Commit-Gate` trailer. `ci-gate`
+  passes it, also after a rebase with no conflict. It fails a commit made with
+  `git commit -n`, and a commit changed after the gate passed it.
+- `just ci` runs `ci-gate` and the steps of the list `ci`. A name in the list
+  that is not a step of `just check` is left out, with a message.
+- The gate guard stops the plain forms of `--no-verify`, `-n`, `core.hooksPath`
+  and a write to a protected path. It lets a command that hides git run, such
+  as `bash <<EOF` or `python -c`. Its tests list both kinds.
 - `prose-check` and the turn gate accept the same pages, a `.qmd` file
   included. A change to `CHANGELOG.md` alone needs no `prose` record.
 - The removal of the GitButler `Stop` hook keeps the nossaifd `Stop` hook.
@@ -1215,7 +1489,11 @@ needs it.
 - A line that only `integration` runs passes `coverage-check` when
   `integration` is in `just check`.
 - A commit that adds its own path to `generated.txt` or
-  `coverage-exclude.txt` still fails `coverage-check`.
+  `coverage-exclude.txt` still fails `coverage-check`. So does a commit that
+  creates one of these files with its own path in it.
+- In a project with no `.agents/generated.txt` or
+  `.agents/coverage-exclude.txt`, `coverage-check`, `docstring-check` and the
+  gate act as with empty lists. A missing file fails none of them.
 - When code changed and there is no coverage report, `coverage-check` fails
   and says "write tests".
 - For a change with Rust unit tests only, `test-parent` does not call
@@ -1254,7 +1532,7 @@ needs it.
   commit, and for a new pragma with no reason.
 - The `review` packet has the docs lens, and a stub doc such as "Returns the
   result." gives a finding.
-- The `docs` packet of a Python project holds the Python language layer.
+- The `update-docs` packet of a Python project holds the Python language layer.
 - A new Rust project gets `just check` with real steps, and no `api` step.
 
 **Docs:**
@@ -1273,8 +1551,8 @@ needs it.
   not a no-op step. Without the role, `prose-check` is a no-op step.
 - A change with no page passes `prose-check`, and so does the first commit of
   a repository with no page.
-- In CI, a pull request that adds a page with a hard problem fails `just
-  check`. So does a push of a branch whose first commit adds that page.
+- A commit that adds a page with a hard problem does not pass the gate. With
+  `prose-check` in the list `ci`, CI also runs the step on the pull request.
 - With `CI=1` on a machine, a page with a hard problem that is not committed
   yet still fails `prose-check`.
 - A repository with its own `test` recipe, and no
@@ -1309,7 +1587,7 @@ needs it.
 - jnterfaces `scripts/install_stack.py`, `scripts/shared_files.py` and
   `scripts/formats.json`
 - jnprofile-python `.agents/just/python/test.just`, with a shebang line, and
-  `profile.json`, which installs the pre-commit framework
+  `profile.json`, which installed the pre-commit framework before the spec
 - agent_gest_git_skills `.agents/skills/grv/SKILL.md`
 - agent_gest_git_skills `.claude/hooks/pre-commit-context.sh` and
   `raw-git-write-guard.sh`

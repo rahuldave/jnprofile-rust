@@ -47,7 +47,7 @@ for the tool `toml`. The
 |---|---|
 | `profile.json` | The profile: how to find a Rust project, its tools, its lines for `.gitignore` and `.worktreedisposable`, the `@code` globs, and the `tests` globs. |
 | `.agents/just/rust/` | One recipe file for each tool, and `steps.py`, the helper script of three steps. The installer copies the folder into the project. |
-| `.agents/targets/rust/` | The Rust rules for the agentic targets `review`, `test-review`, `docs` and `prose`. |
+| `.agents/targets/rust/` | The Rust rules for the agentic targets `review`, `test-review`, `update-docs` and `prose`. |
 | `.agents/skills/rust-profile/` | The skill that tells an agent how to use the recipes. |
 | `lab/` | The lint of the recipe files and the check of the prose. |
 | `tests/` | The lab, and the tests of `steps.py` and of the files of the profile. |

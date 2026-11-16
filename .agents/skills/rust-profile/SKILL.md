@@ -119,7 +119,7 @@ profile reads a list of files instead:
   writes them. Do not edit them, because the next `just install` names an
   edited file and does not update it. Put your own recipes in the Justfile.
 - **`.agents/targets/rust/`** holds the Rust rules for the agentic targets
-  `review`, `test-review`, `docs` and `prose`. `jagt render` adds them to the
+  `review`, `test-review`, `update-docs` and `prose`. `jagt render` adds them to the
   packet of each target.
 
 ## Rules for agents
