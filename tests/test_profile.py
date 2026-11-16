@@ -24,7 +24,7 @@ def doc_entry():
     return json.loads(re.search(r'```json\n(.*?)```', doc, re.S).group(1))
 
 
-STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check']
+STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check']
 
 
 class Profile(unittest.TestCase):

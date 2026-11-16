@@ -119,6 +119,18 @@
       ],
       "programs": []
     },
+    "integration": {
+      "packages": [],
+      "recipes": "integration.just",
+      "verify": [
+        "integration"
+      ],
+      "programs": [
+        "llvm-tools",
+        "stable",
+        "cargo-llvm-cov"
+      ]
+    },
     "test": {
       "packages": [],
       "recipes": "test.just",
@@ -158,6 +170,7 @@
   "default_tools": [
     "lint",
     "typecheck",
+    "integration",
     "test",
     "docstring"
   ],

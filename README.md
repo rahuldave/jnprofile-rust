@@ -8,7 +8,8 @@ brings its recipes. A recipe is a command of the project's Justfile, such as
 
 The profile gives a Cargo project the real steps of the commit gates. A step is
 one recipe that `just check` runs. The steps of the profile are `fmt-check`,
-`lint`, `typecheck`, `test`, `coverage-check` and `docstring-check`. The spec
+`lint`, `typecheck`, `test`, `integration`, `coverage-check` and
+`docstring-check`. The spec
 of the commit gates is in [docs/spec.md](docs/spec.md).
 
 The documentation site is https://rahuldave.github.io/jnprofile-rust/. Its

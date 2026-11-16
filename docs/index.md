@@ -14,7 +14,7 @@ jnterfaces has the rust profile since jnterfaces#34, and installs its programs s
 just install --profile rust
 ```
 
-In a folder with no `Cargo.toml`, the command first runs `cargo init --vcs none`. It then installs the four tools `lint`, `typecheck`, `test` and `docstring`. If you do not choose other roles, it also turns on the default roles of the profile, `tasker` and `prose`. The section [The roles](https://rahuldave.github.io/jnterfaces/#roles) of the jnterfaces guide says what each role installs.
+In a folder with no `Cargo.toml`, the command first runs `cargo init --vcs none`. It then installs the five tools `lint`, `typecheck`, `test`, `integration` and `docstring`. If you do not choose other roles, it also turns on the default roles of the profile, `tasker` and `prose`. The section [The roles](https://rahuldave.github.io/jnterfaces/#roles) of the jnterfaces guide says what each role installs.
 
 The machine needs Rust from rustup, and the programs that jnterfaces needs. The profile installs the rest with rustup and cargo. The key `programs` of `profile.json` names each program, how the installer checks it, and how it installs it.
 
@@ -25,7 +25,7 @@ The installer checks the programs of each tool that it installs, in the project 
 | `rustup` | Every step | https://rustup.rs/. The installer stops if it is missing. |
 | The toolchain, with `cargo` | Every step | The profile runs `rustup toolchain install` when the toolchain that `rust-toolchain.toml` or `rust-toolchain` pins is missing. With no pin and no default toolchain, run `rustup default stable` yourself |
 | `rustfmt` and `clippy` | `fmt`, `fmt-check`, `lint` and `docstring-check` | The profile runs `rustup component add` |
-| `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1` |
+| `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test`, `integration` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1` |
 | `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4` |
 | `just` | Every recipe | `cargo install just` |
 | `uv` | `diff-cover` and the helper script of the steps | https://docs.astral.sh/uv/ |
@@ -38,8 +38,9 @@ The installer checks the programs of each tool that it installs, in the project 
 | `fmt-check` | `lint` | Code that rustfmt formats in another way |
 | `lint` | `lint` | Each warning of clippy |
 | `typecheck` | `typecheck` | A type error in the code or in the tests |
-| `test` | `test` | A test that fails |
-| `coverage-check` | `test` | A changed line of code that no test runs |
+| `test` | `test` | A unit test that fails, in the library or a binary |
+| `integration` | `integration` | A test that fails in a test target, such as a file in `tests/` |
+| `coverage-check` | `test` | A changed line of code that neither `test` nor `integration` runs |
 | `docstring-check` | `docstring` | An item with no doc comment, public or private |
 
 [The tools](tools.md) gives each recipe, and the rules for the lines that no test can run. The profile has no `api` tool yet. That tool waits for the release of smalldocs that reads rustdoc.

@@ -107,8 +107,8 @@ The program after `rustup` is `toolchain`. Its check is `rustup show active-tool
 
 A machine where rustup has no default toolchain, as after `rustup-init --default-toolchain none`, fails the check in a project with no pin. `rustup toolchain install` with no name fails there too. So in a project that has a `Cargo.toml`, the installer stops and prints the description of `toolchain`, which says to run `rustup default stable` or to pin a toolchain. In a folder with no `Cargo.toml`, `cargo init` fails first, before the installer checks the programs, and rustup prints its own hint. The profile does not run `rustup default stable` itself, because that would change the default of rustup on each machine that has none, also for a project that pins its toolchain.
 - **The key `tests`** of `profile.json` holds the globs of the test files, here `tests/**`, the folder `tests` at the top of the project. A wider glob such as `**/tests/**` would also take a module in `src/` and bring its new code into the parent. The installer copies the globs into the key `tests` of `.agents/stack.json`, for each profile; jnterfaces#46 added that. `test-parent` of agent_gest_git_skills reads that key, and copies only those files into the worktree of the parent.
-- **The step names** are the recipe names. The profile gives `fmt-check`, `lint`, `typecheck`, `test`, `coverage-check` and `docstring-check`, and also `test-paths` for the `test-parent` recipe.
-- **The key `verify`** of each tool lists the steps of the tool, so `just rust verify` runs all six steps today.
+- **The step names** are the recipe names. The profile gives `fmt-check`, `lint`, `typecheck`, `test`, `integration`, `coverage-check` and `docstring-check`, and also `test-paths` for the `test-parent` recipe.
+- **The key `verify`** of each tool lists the steps of the tool, so `just rust verify` runs all seven steps today.
 - **The folder `.agents/targets/rust/`** is an extra of `skill-package.json`, so the installer copies it as it copies `.agents/just/rust/`.
 
 ## What the profile needs from jnterfaces

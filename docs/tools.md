@@ -50,17 +50,23 @@ The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.wo
 
 | Recipe | What it does |
 |---|---|
-| `just test` | Runs the tests with `cargo llvm-cov test`, and writes the coverage to `target/llvm-cov/lcov.info`. Extra arguments go to cargo llvm-cov test, so `just test parse` runs the tests whose names hold `parse` |
-| `just coverage-check` | Fails on each changed line of code that no test runs. It runs the tests first, unless `test` of the same run wrote the report |
+| `just test` | Runs the unit tests, those of the libraries and the binaries, with `cargo llvm-cov test`. It writes the coverage to `target/llvm-cov/test.lcov`. Extra arguments go to cargo llvm-cov test, so `just test parse` runs the unit tests whose names hold `parse` |
+| `just coverage-check` | Fails on each changed line of code that no test runs. A line that `test` or `integration` runs passes. It runs each of them first, unless it wrote its report in the same run |
 | `just test-paths [PATH...]` | Runs the tests of some files in the folder `tests`, with `cargo test` and without coverage |
 
 `cargo llvm-cov` writes the coverage as an LCOV file, a text format that lists how often each line ran. `diff-cover` is a Python program that compares such a file with the diff of git.
 
-`coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes. It reads the report of `test` only for the same run ID and the same worktree tree. On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step runs `cargo llvm-cov report --fail-under-lines 100`, which checks every line of the code.
+`coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes.
+
+The step merges the report of `test` and that of `integration` into one report, and gives it to `diff-cover`. A line that one of them runs passes. A line that one report measures and no report runs fails, also when the other report does not measure it, as for code under `#[cfg(not(test))]`. It reads each report only for the same run ID and the same worktree tree.
+
+On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step checks each line of the merged report, and it names each line that no test runs.
+
+The report of `integration` counts only when `integration` is in the steps of `just check`. The installer of jnterfaces writes those steps into the key `steps` of `.agents/stack.json`. The setup answer that runs `integration` only in `just verify` takes it out of that list. Then a line that only an integration test runs fails `coverage-check`. Give it a unit test, or exclude its file. With no `.agents/stack.json`, the report counts, as the spec says by default.
 
 `diff-cover` counts only the files that are in the report. `cargo llvm-cov` leaves out a file that no test target compiles, such as a file that no `mod` line names, or a file in `examples/`. It also leaves out each file in a folder named `tests`, `examples` or `benches`, at any depth, for example `src/tests/mod.rs`.
 
-So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, and the files of the two lists. On the first commit, `cargo llvm-cov report` checks only the files in the report. The build script `build.rs` is in the report.
+So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, and the files of the two lists. On the first commit, the step checks only the files in the reports. The build script `build.rs` is in the report.
 
 LLVM counts the code of a `macro_rules!` macro at the line that calls the macro. So a branch of a macro that no test runs does not fail `coverage-check`, and the `test-review` target checks it.
 
@@ -68,9 +74,21 @@ LLVM counts the code of a `macro_rules!` macro at the line that calls the macro.
 
 The root Justfile of a project has the line `export JLOG_RUN := env("JLOG_RUN", uuid())`. So each run of `just`, such as `just check`, has one run ID, and each inner call of `just` gets the same ID. A module must not have the line, because a second line would make a second ID.
 
-A full run of `just test`, with no arguments, takes the worktree tree before the tests run. The worktree tree is the tree hash of every file that git does not ignore, staged or not, without the folder `target`. When the tests pass and the tree has not changed, `test` saves `JLOG_RUN` and the tree in `target/llvm-cov/run.json`. A file that changed while the tests ran drops the run, because the report may come from the old code.
+A full run of `just test`, with no arguments, takes the worktree tree before the tests run. The worktree tree is the tree hash of every file that git does not ignore, staged or not, without the folder `target`. When the tests pass and the tree has not changed, `test` saves `JLOG_RUN` and the tree in `target/llvm-cov/test.run.json`. A file that changed while the tests ran drops the run, because the report may come from the old code.
 
-`coverage-check` reads the report only when both match the current run and the current tree. So in `just check` the tests run once. Alone, `just coverage-check` runs the tests itself, and so does a run after `just test parse`.
+`coverage-check` reads a report only when both match the current run and the current tree. So in `just check`, which runs `test`, then `integration`, then `coverage-check`, the tests run once. Alone, `just coverage-check` runs the tests itself, and so does a run after `just test parse`. `integration` saves its run in the same way, in `target/llvm-cov/integration.run.json`.
+
+## integration
+
+| Recipe | What it does |
+|---|---|
+| `just integration` | Runs the integration tests with `cargo llvm-cov test`: each test target, and each example or bench that sets `test = true`. It writes the coverage to `target/llvm-cov/integration.lcov`. Extra arguments go to cargo llvm-cov test, as for `test` |
+
+An integration test is a test target, such as a file `tests/NAME.rs`, or a `[[test]]` of `Cargo.toml`. It uses the crate from outside, as a user does. A workspace with no test target runs no test, and its report is empty.
+
+Each step reads the targets from `cargo metadata`, and names each target whose key `test` is true, with `--bin`, `--test`, `--example` or `--bench`. So a `[[test]]` with `test = false`, such as a slow suite, does not run, as with a plain `cargo test`. A library has no such name, so `test` gives `--lib`. cargo looks for a name in each package. So when a library sets `test = false`, or two packages have a target of the same name and only one tests it, each package runs in a `cargo llvm-cov` of its own, and the step merges the reports.
+
+An extra argument that chooses targets or packages, such as `--test api` or `-p core`, takes the place of the choice of the step. The step adds `--workspace` only when the arguments choose no package. So `just integration --test slow` runs that suite, and `just test --test api` runs only `tests/api.rs`. An argument after `--` goes to the tests. The doctests, the tests in doc comments, run in neither step. `cargo llvm-cov test` leaves them out unless it gets `--doctests`, and that option needs nightly Rust.
 
 ## test-paths
 

@@ -257,7 +257,8 @@ class RustLab(unittest.TestCase):
         # The installer copies the code and tests globs of the profile into the record (jnterfaces#34 and #46).
         self.assertEqual(saved['code'], {'rust': PROFILE['code']})
         self.assertEqual(saved['tests'], {'rust': PROFILE['tests']})
-        self.assertEqual([pair.split(':')[1] for pair in saved['tools']], ['lint', 'typecheck', 'test', 'docstring'])
+        self.assertEqual([pair.split(':')[1] for pair in saved['tools']], ['lint', 'typecheck', 'integration', 'test',
+                                                                          'docstring'])
         for path in ('.agents/just/rust/steps.py', '.agents/skills/rust-profile/SKILL.md',
                      *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'docs', 'prose'))):
             self.assertTrue((self.app / path).is_file(), path)
@@ -265,7 +266,8 @@ class RustLab(unittest.TestCase):
         self.assertIn('/target/', (self.app / '.worktreedisposable').read_text().splitlines())
         self.assertIn('lint for rust needs no packages', self.installed.stderr)
         summary = self.just('--summary').stdout.split()
-        for step in ('fmt-check', 'lint', 'typecheck', 'test', 'coverage-check', 'docstring-check', 'test-paths'):
+        for step in ('fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check',
+                     'test-paths'):
             self.assertIn(step, summary)
         self.assertNotIn('api', ' '.join(summary))
 
@@ -426,10 +428,98 @@ class RustLab(unittest.TestCase):
         (self.dir / 'src/lib.rs').write_text(LIB.replace('    a + b', '    a + "b"'))
         self.assertNotEqual(self.just('typecheck').returncode, 0)
 
-    def test_test_fails_on_a_failed_test_and_verify_stops(self):
-        (self.dir / 'tests/api.rs').write_text(API_TEST.replace('2);', '3);'))
+    def test_test_fails_on_a_failed_unit_test_and_verify_stops(self):
+        (self.dir / 'src/lib.rs').write_text(LIB.replace('5);', '6);'))
         self.assertNotEqual(self.just('test').returncode, 0)
+        self.assertEqual(self.just('integration').returncode, 0)
         self.assertNotEqual(self.just('verify').returncode, 0)
+
+    def test_integration_fails_on_a_failed_test_in_the_folder_tests_and_test_does_not_run_it(self):
+        (self.dir / 'tests/api.rs').write_text(API_TEST.replace('2);', '3);'))
+        done = self.just('test')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertNotIn('add_works_from_outside', self.out(done))
+        done = self.just('integration')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('add_works_from_outside', self.out(done))
+        self.assertNotIn('add_sums_two_numbers', self.out(done))
+        self.assertNotEqual(self.just('verify').returncode, 0)
+
+    def add_outside_only(self):
+        """Add the module extra, which only a test in the folder tests runs, and commit nothing."""
+        self.add_extra()
+        (self.dir / 'tests/extra.rs').write_text('//! The test of extra.\n\n#[test]\nfn double_works() {\n'
+                                                 '    assert_eq!(app::extra::double(2), 4);\n}\n')
+
+    def set_steps(self, root, drop=()):
+        """Take the steps DROP out of the list of steps of .agents/stack.json in ROOT, as the setup answer does."""
+        stack = root / '.agents/stack.json'
+        data = json.loads(stack.read_text())
+        data['steps'] = [step for step in data['steps'] if step not in drop]
+        stack.write_text(json.dumps(data, indent=2) + '\n')
+
+    def test_a_line_that_only_integration_runs_passes_coverage_check_while_integration_is_in_just_check(self):
+        self.assertIn('integration', json.loads((self.dir / '.agents/stack.json').read_text())['steps'])
+        self.add_outside_only()
+        done = self.just('coverage-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertTrue((self.dir / 'target/llvm-cov/integration.lcov').is_file())
+        self.set_steps(self.dir, drop=['integration'])
+        done = self.just('coverage-check')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('integration is not in the steps of just check', done.stdout)
+        self.assertIn('src/extra.rs', done.stdout)
+        self.assertIn('Missing lines 4-6', done.stdout)
+
+    def test_on_the_first_commit_a_line_that_only_integration_runs_passes(self):
+        fresh = self.base / 'first-integration'
+        shutil.copytree(self.fresh, fresh, symlinks=True)
+        self.addCleanup(shutil.rmtree, fresh, True)
+        (fresh / 'src/extra.rs').write_text(EXTRA)
+        (fresh / 'src/lib.rs').write_text(f'{LIB}\n/// The module with untested code.\npub mod extra;\n')
+        (fresh / 'tests/extra.rs').write_text('#[test]\nfn double_works() {\n    assert_eq!(app::extra::double(2), 4);\n}\n')
+        done = self.just('coverage-check', cwd=fresh)
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.set_steps(fresh, drop=['integration'])
+        done = self.just('coverage-check', cwd=fresh)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('src/extra.rs:4: no test runs this line', done.stdout)
+
+    def test_a_test_target_with_test_false_does_not_run_and_extra_arguments_choose_the_targets(self):
+        (self.dir / 'tests/slow.rs').write_text('#[test]\nfn slow_fails() {\n    panic!("slow");\n}\n')
+        (self.dir / 'Cargo.toml').write_text((self.dir / 'Cargo.toml').read_text()
+                                             + '\n[[test]]\nname = "slow"\ntest = false\n')
+        done = self.just('integration')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertNotIn('slow_fails', self.out(done))
+        done = self.just('integration', '--test', 'slow')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('slow_fails', self.out(done))
+        done = self.just('test', '--test', 'api')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('add_works_from_outside', self.out(done))
+        self.assertNotIn('add_sums_two_numbers', self.out(done))
+        done = self.just('test', '-p', 'app', '--lib')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('add_sums_two_numbers', self.out(done))
+        self.assertNotIn('add_works_from_outside', self.out(done))
+
+    def test_a_line_that_only_the_build_without_tests_has_fails_when_no_test_runs_it(self):
+        (self.dir / 'src/lib.rs').write_text(LIB.replace('    a + b\n', '    #[cfg(not(test))]\n    if a == -100 {\n'
+                                                         '        return 0;\n    }\n    a + b\n'))
+        done = self.just('coverage-check')
+        self.assertNotEqual(done.returncode, 0, self.out(done))
+        self.assertIn('src/lib.rs', done.stdout)
+        self.assertIn('Missing lines', done.stdout)
+
+    def test_a_project_with_no_test_target_gets_an_empty_report_of_integration(self):
+        (self.dir / 'tests/api.rs').unlink()
+        done = self.just('integration')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('the workspace has no test target', done.stdout)
+        self.assertEqual((self.dir / 'target/llvm-cov/integration.lcov').read_text(), '')
+        done = self.just('coverage-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
 
     def add_extra(self, name='extra'):
         """Add the module NAME with a function that no test runs, and name it in src/lib.rs."""
@@ -470,13 +560,17 @@ class RustLab(unittest.TestCase):
             self.assertEqual(done.returncode, 0, f'{step}:\n{self.out(done)}')
 
     def test_coverage_check_alone_runs_the_tests_again(self):
-        report = self.dir / 'target/llvm-cov/lcov.info'
-        self.assertEqual(self.just('test').returncode, 0)
-        report.write_text('SF:old\nend_of_record\n')
+        for step in ('test', 'integration'):
+            report = self.dir / f'target/llvm-cov/{step}.lcov'
+            self.assertEqual(self.just(step).returncode, 0)
+            report.write_text('SF:old\nend_of_record\n')
         done = self.just('coverage-check')
         self.assertEqual(done.returncode, 0, self.out(done))
-        self.assertIn('SF:', report.read_text())
-        self.assertNotIn('SF:old', report.read_text())
+        for step in ('test', 'integration'):
+            report = (self.dir / f'target/llvm-cov/{step}.lcov').read_text()
+            self.assertIn('SF:', report)
+            self.assertNotIn('SF:old', report)
+            self.assertIn(f'no report of {step} for this run and this tree, so the tests run now', done.stdout)
 
     def test_on_the_first_commit_coverage_check_needs_every_line(self):
         fresh = self.base / 'first'
@@ -619,13 +713,15 @@ class RustLab(unittest.TestCase):
         self.assertIn('--config .config/tomlfmt.toml', done.stdout)
 
     def test_coverage_check_reads_the_report_of_test_only_in_the_same_run_and_tree(self):
-        report = self.dir / 'target/llvm-cov/lcov.info'
+        report = self.dir / 'target/llvm-cov/test.lcov'
         env = dict(os.environ, JLOG_RUN='run-one')
         self.assertEqual(self.just('test', env=env).returncode, 0)
+        self.assertEqual(self.just('integration', env=env).returncode, 0)
         before = report.stat().st_mtime_ns
         done = self.just('coverage-check', env=env)
         self.assertEqual(done.returncode, 0, self.out(done))
-        self.assertIn('so they do not run again', done.stdout)
+        self.assertIn('the tests of test in this run, run-one, wrote the report, so they do not run again', done.stdout)
+        self.assertIn('the tests of integration in this run, run-one, wrote the report', done.stdout)
         self.assertEqual(report.stat().st_mtime_ns, before)
         for other in (dict(os.environ, JLOG_RUN='run-two'), {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}):
             done = self.just('coverage-check', env=other)
@@ -654,14 +750,17 @@ class RustLab(unittest.TestCase):
         # The installer writes the line of the run ID. A root recipe has the two steps, as just check will have
         # them. The index runs each in an inner just call.
         self.assertIn('export JLOG_RUN := env("JLOG_RUN", uuid())', justfile.read_text().splitlines())
-        justfile.write_text(justfile.read_text() + '\ngates: test coverage-check\n')
+        justfile.write_text(justfile.read_text() + '\ngates: test integration coverage-check\n')
         env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
         env['PATH'] = f'{bin_dir}:{env["PATH"]}'
         done = self.just('gates', env=env)
         self.assertEqual(done.returncode, 0, self.out(done))
         self.assertIn('so they do not run again', done.stdout)
-        runs = [line for line in log.read_text().splitlines() if line.startswith('cargo llvm-cov test')]
-        self.assertEqual(len(runs), 1, runs)
+        runs = [line for line in done.stdout.splitlines() if line.startswith('cargo llvm-cov test')]
+        self.assertEqual(len(runs), 2, runs)
+        self.assertTrue(runs[0].endswith('--workspace --lib --lcov --output-path target/llvm-cov/test.part0.lcov'), runs)
+        self.assertTrue(runs[1].endswith('--workspace --test api --lcov --output-path '
+                                         'target/llvm-cov/integration.part0.lcov'), runs)
 
     def test_a_project_in_a_subfolder_reads_its_own_lists(self):
         mono = self.base / 'mono'
@@ -698,10 +797,11 @@ class RustLab(unittest.TestCase):
         done = self.just('rust', 'verify', env=env)
         self.assertEqual(done.returncode, 0, self.out(done))
         lines = log.read_text().splitlines()
-        for start in ('cargo fmt --all --check', 'cargo clippy --workspace --all-targets', 'cargo check --workspace',
-                      'rm -f target/llvm-cov/lcov.info', 'mkdir -p target/llvm-cov', 'cargo llvm-cov test --workspace'):
+        for start in ('cargo fmt --all --check', 'cargo clippy --workspace --all-targets', 'cargo check --workspace'):
             self.assertTrue(any(line.startswith(start) for line in lines), f'{start} not in {lines}')
-        self.assertTrue(any(line.endswith('coverage target/llvm-cov/lcov.info') for line in lines), lines)
+        for end in ("steps.py' run test \"$@\"", "steps.py' run integration \"$@\"", "steps.py' coverage",
+                    "steps.py' fresh integration || " "uv run"):
+            self.assertTrue(any(line.endswith(end) or end in line for line in lines), f'{end} not in {lines}')
         self.assertTrue(any(line.endswith('steps.py\' docs') for line in lines), lines)
 
 
