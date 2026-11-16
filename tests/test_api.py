@@ -329,6 +329,14 @@ class Parts(Folder):
         with tempfile.TemporaryDirectory() as temp:
             self.assertEqual(steps.api_settings(Path(temp))[0], None)
 
+    def test_every_uv_run_of_the_steps_names_python_3_11_or_later(self):
+        source = (REPO / '.agents/just/rust/steps.py').read_text()
+        self.assertEqual(steps.UV_RUN[-2:], ['--python', '>=3.11'])
+        self.assertNotIn("'uv', 'run'", source.replace("UV_RUN = ['uv', 'run'", ''))
+        self.assertEqual(steps.smalldocs('x')[:len(steps.UV_RUN)], steps.UV_RUN)
+        base = (REPO / '.agents/just/rust/base.just').read_text()
+        self.assertIn("uv run --no-project --quiet --python '>=3.11'", base)
+
     def test_the_pin_of_steps_is_the_nightly_of_the_profile(self):
         nightly = {entry['name']: entry for entry in PROFILE['programs']}['nightly']
         self.assertEqual(nightly['check'], f'rustup run {steps.NIGHTLY} rustc --version')
@@ -458,6 +466,15 @@ class Smalldocs(Folder):
         code, out = self.api('api', 'check')
         self.assertEqual(code, 0, out)
         self.assertIn('with the crate app', out)
+
+    def test_api_check_and_prose_run_when_uv_would_pick_python_3_9(self):
+        self.checker()
+        self.write('src/lib.rs', self.DOCUMENTED + '\n')
+        code, out = self.api('api', 'check', env={'UV_PYTHON': '3.9'})
+        self.assertEqual(code, 0, out)
+        code, out = self.api('api', 'prose', env={'UV_PYTHON': '3.9'})
+        self.assertEqual(code, 0, out)
+        self.assertIn('the module comment of src/lib.rs', out)
 
     def test_prose_without_the_checker_passes_with_a_word(self):
         code, out = self.api('api', 'prose')

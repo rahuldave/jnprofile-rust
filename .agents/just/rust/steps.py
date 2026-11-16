@@ -66,6 +66,9 @@ WORK = Path('target/jnprofile-rust')
 # tool api adds it to .gitignore and .worktreedisposable.
 API_WORK = Path('.jnprofile-rust')
 SMALLDOCS = 'smalldocs==0.5.12'
+# The start of each uv run of the steps. smalldocs needs Python 3.11 or later, and uv may pick an older Python when
+# none is named, as on a machine whose python3 is 3.9 or with UV_PYTHON set. The recipes name the same version.
+UV_RUN = ['uv', 'run', '--no-project', '--quiet', '--python', '>=3.11']
 DOCS_CONFIG = Path('docs/_smalldocs.yml')
 # The nightly toolchain that runs rustdoc for smalldocs, which needs -Z unstable-options. smalldocs 0.5.12 reads
 # only the formats 57 and 61 of the JSON of rustdoc, so the date is fixed. The program nightly of profile.json
@@ -524,7 +527,7 @@ def coverage():
     WORK.mkdir(parents=True, exist_ok=True)
     kept = WORK / 'lcov.info'
     kept.write_text(filter_lcov(merge_lcov(texts), root, excluded))
-    code = subprocess.run(['uv', 'run', '--no-project', '--quiet', '--with', DIFF_COVER, 'diff-cover', str(kept),
+    code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept),
                            '--compare-branch', 'HEAD', '--include-untracked', '--fail-under', '100']).returncode
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
@@ -835,7 +838,7 @@ def api_settings(folder):
 
 def smalldocs(*args):
     """The command that runs ARGS with smalldocs, with uv. smalldocs runs cargo +TOOLCHAIN rustdoc for the JSON."""
-    return ['uv', 'run', '--no-project', '--quiet', '--with', SMALLDOCS, *args]
+    return [*UV_RUN, '--with', SMALLDOCS, *args]
 
 
 def ci_named():
@@ -998,7 +1001,7 @@ def api(action, option=None):
                  else f"the module comment of {page.relative_to(out / 'modules').with_suffix('').as_posix()}"
                  for page in pages]
         print(f'api-prose-check: the API pages {", ".join(names)}, of the files changed {since}', flush=True)
-        code = subprocess.run(['uv', 'run', '--no-project', '--quiet', 'python', str(PROSE_CHECKER),
+        code = subprocess.run([*UV_RUN, 'python', str(PROSE_CHECKER),
                                *map(str, pages)]).returncode
         if code:
             print('api-prose-check: fix each hard problem in the doc comment that it comes from', file=sys.stderr)
