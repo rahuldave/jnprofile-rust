@@ -34,7 +34,7 @@ The Rust profile, with the real steps for a Cargo project:
   - `docstring-check` uses `-D missing_docs` and `-D clippy::missing_docs_in_private_items`. Later note: the user approved `-W` with `--cap-lints warn` instead, and the spec now says so.
   - `coverage-check` uses `cargo llvm-cov` and `diff-cover`.
   - No recipe has a shebang line, so each line runs through `jlog`.
-- **The language layer** in `.agents/targets/rust/`. It holds short Rust rules for the `review`, `test-review`, `docs` and `prose` targets, for example the `# Examples` and `# Errors` sections of a doc comment.
+- **The language layer** in `.agents/targets/rust/`. It holds short Rust rules for the `review`, `test-review`, `docs` and `prose` targets, for example the `# Examples` and `# Errors` sections of a doc comment. Later note: the spec renamed the `docs` target to `update-docs`, so the file is `update-docs.md`.
 - **A skill `rust-profile`**, like `typescript-profile`.
 - **A `skill-package.json`.** Its required executables are `cargo`, `cargo-llvm-cov` and `just`.
 - **A Justfile and a docs site** with smalldocs, like the other profiles.

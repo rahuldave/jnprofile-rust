@@ -26,7 +26,7 @@ test *args:
 
 # Check the prose of the Markdown of this repository with nossaifd check.py, without the front matter
 prose-check:
-    {{python}} lab/prose_check.py {{quote(checker)}} README.md docs/index.md docs/tools.md docs/jnterfaces-entry.md .agents/skills/rust-profile/SKILL.md .agents/targets/rust/review.md .agents/targets/rust/test-review.md .agents/targets/rust/docs.md .agents/targets/rust/prose.md
+    {{python}} lab/prose_check.py {{quote(checker)}} README.md docs/index.md docs/tools.md docs/jnterfaces-entry.md .agents/skills/rust-profile/SKILL.md .agents/targets/rust/review.md .agents/targets/rust/test-review.md .agents/targets/rust/update-docs.md .agents/targets/rust/prose.md
 
 # Everything a commit must pass
 check: lint test prose-check docs-check

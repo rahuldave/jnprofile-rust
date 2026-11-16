@@ -268,7 +268,7 @@ class RustLab(unittest.TestCase):
         self.assertLess(verify.index('integration'), verify.index('test'))
         self.assertLess(verify.index('test'), verify.index('coverage-check'))
         for path in ('.agents/just/rust/steps.py', '.agents/skills/rust-profile/SKILL.md',
-                     *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'docs', 'prose'))):
+                     *(f'.agents/targets/rust/{name}.md' for name in ('review', 'test-review', 'update-docs', 'prose'))):
             self.assertTrue((self.app / path).is_file(), path)
         self.assertIn('/target/', (self.app / '.gitignore').read_text().splitlines())
         self.assertIn('/target/', (self.app / '.worktreedisposable').read_text().splitlines())

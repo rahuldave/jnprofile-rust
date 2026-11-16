@@ -136,7 +136,7 @@ Stable Rust has no pragma that leaves out one line from the coverage. So the pro
 
 Each line of a list is a path or a glob, with the rules of git pathspecs. A `*` does not match a `/`, `**` matches any number of folders, and a path that ends with `/` names a folder. A line that starts with `#` is a comment. Write the reason for each entry in a comment above it.
 
-The steps read both lists from the parent commit, with `git show HEAD:./PATH`, which names the path from the top of the project. So a new entry counts only after it is in a commit of its own, and a commit cannot exempt its own code. With no parent, both lists are empty. The `test-review` target judges each new entry.
+The steps read both lists from the parent commit, with `git show HEAD:./PATH`, which names the path from the top of the project. So a new entry counts only after it is in a commit of its own, and a commit cannot exempt its own code. With no parent, or when the parent has no such file, the list is empty. The `test-review` target judges each new entry.
 
 ## The helper script
 

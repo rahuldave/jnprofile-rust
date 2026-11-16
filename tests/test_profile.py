@@ -106,7 +106,10 @@ class Profile(unittest.TestCase):
                 self.assertIn(entry.get('expect', ''), done.stdout)
 
     def test_the_language_layer_has_a_file_for_each_target(self):
-        for target in ('review', 'test-review', 'docs', 'prose'):
+        # The agentic targets of agent_gest_git_skills read .agents/targets/LANGUAGE/TARGET.md, and the target that
+        # writes docs is update-docs.
+        self.assertFalse((REPO / '.agents/targets/rust/docs.md').exists())
+        for target in ('review', 'test-review', 'update-docs', 'prose'):
             self.assertTrue((REPO / f'.agents/targets/rust/{target}.md').is_file(), target)
 
     def test_the_jnterfaces_entry_doc_shows_an_entry_that_finds_a_cargo_project(self):
