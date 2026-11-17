@@ -11,3 +11,7 @@ setup:
 # Build the code of every package of the workspace. Extra arguments go to cargo: just build --release
 build *args:
     cargo build --workspace "$@"
+
+# Print the version of the project, X.Y.Z, from Cargo.toml, for the release tag. It prints nothing when there is none
+version:
+    {{rust_py}} {{rust_steps}} version
