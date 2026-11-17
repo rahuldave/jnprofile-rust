@@ -12,6 +12,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'lab'))
+import ci_programs  # noqa: E402
 import lint_just  # noqa: E402
 
 PROFILE = json.loads((REPO / 'profile.json').read_text())
@@ -25,6 +26,59 @@ def doc_entry():
 
 
 STEPS = ['fmt-check', 'lint', 'typecheck', 'test', 'integration', 'coverage-check', 'docstring-check', 'api-check']
+
+
+class Floor(unittest.TestCase):
+    """ci_programs.meets reads a floor as .agents/tools_check.py of jnterfaces does."""
+
+    def test_a_newer_version_passes_and_an_older_one_fails(self):
+        entry = {'version': '>=0.10.0'}
+        self.assertTrue(ci_programs.meets(entry, 'taplo 0.10.0\n'))
+        self.assertTrue(ci_programs.meets(entry, 'taplo 0.11.2\n'))
+        self.assertTrue(ci_programs.meets(entry, 'taplo 1.0\n'))
+        self.assertFalse(ci_programs.meets(entry, 'taplo 0.9.9\n'))
+
+    def test_the_first_version_counts_and_a_nightly_suffix_is_ignored(self):
+        entry = {'version': '>=1.102.0'}
+        self.assertTrue(ci_programs.meets(entry, 'rustc 1.102.0-nightly (3ef0c22cd 2026-11-11)\n'))
+        self.assertFalse(ci_programs.meets(entry, 'rustc 1.101.0-nightly (3ef0c22cd 2026-11-11)\n'))
+        # The date comes after the version, so its numbers do not count.
+        self.assertFalse(ci_programs.meets({'version': '>=2026.0.0'}, 'rustc 1.102.0 (x 2026-11-11)\n'))
+
+    def test_output_with_no_version_fails_a_floor_and_the_expect_still_counts(self):
+        self.assertFalse(ci_programs.meets({'version': '>=1.0.0'}, 'no version here\n'))
+        self.assertTrue(ci_programs.meets({}, 'anything\n'))
+        self.assertFalse(ci_programs.meets({'expect': 'llvm-tools', 'version': '>=1.0.0'}, 'tool 2.0.0\n'))
+
+    def test_a_version_on_stderr_counts_when_stdout_has_none(self):
+        self.assertTrue(ci_programs.meets({'version': '>=1.0.0'}, '', 'tool 1.2.3\n'))
+        self.assertFalse(ci_programs.meets({'version': '>=1.0.0'}, '', 'tool 0.2.3\n'))
+        # stdout comes first.
+        self.assertFalse(ci_programs.meets({'version': '>=1.0.0'}, 'tool 0.9.0\n', 'tool 1.2.3\n'))
+
+    def test_a_floor_or_a_version_with_two_numbers_counts_with_a_zero(self):
+        self.assertTrue(ci_programs.meets({'version': '>=1.2'}, 'tool 1.2.0\n'))
+        self.assertFalse(ci_programs.meets({'version': '>=1.2'}, 'tool 1.1.9\n'))
+        self.assertTrue(ci_programs.meets({'version': '>=1.2.0'}, 'tool 1.2\n'))
+        self.assertFalse(ci_programs.meets({'version': '>=1.2.1'}, 'tool 1.2\n'))
+        self.assertTrue(ci_programs.meets({'version': ' >=1.2.0 '}, 'tool 1.2.0\n'))
+
+    def test_a_malformed_floor_raises_an_error_that_names_it(self):
+        for floor in ('1.0', '>1.0', '>=x', '', 1):
+            with self.subTest(floor=floor), self.assertRaisesRegex(ValueError, 'not a version floor'):
+                ci_programs.meets({'name': 'tool', 'version': floor}, 'tool 1.0.0\n')
+
+    def test_ci_finds_a_program_below_its_floor_missing_so_it_installs_it(self):
+        # A fake taplo of 0.9.0 on PATH fails the floor of taplo, so ci_programs.works says to install it.
+        taplo = next(entry for entry in PROFILE['programs'] if entry['name'] == 'taplo')
+        with tempfile.TemporaryDirectory() as folder:
+            fake = Path(folder) / 'taplo'
+            fake.write_text('#!/bin/sh\necho "taplo 0.9.0"\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, PATH=folder + os.pathsep + os.environ.get('PATH', ''))
+            self.assertFalse(ci_programs.works(taplo, folder, env))
+            fake.write_text('#!/bin/sh\necho "taplo 0.11.0"\n')
+            self.assertTrue(ci_programs.works(taplo, folder, env))
 
 
 class Profile(unittest.TestCase):
@@ -65,7 +119,8 @@ class Profile(unittest.TestCase):
         listed = PROFILE['base']['programs'] + [name for tool in PROFILE['tools'].values() for name in tool['programs']]
         self.assertEqual(set(listed), set(programs))
         for name, entry in programs.items():
-            self.assertLessEqual(set(entry), {'name', 'check', 'expect', 'install', 'install_in', 'description'}, name)
+            self.assertLessEqual(set(entry), {'name', 'check', 'expect', 'version', 'install', 'install_in',
+                                              'description'}, name)
             for key in ('check', 'install'):
                 if key in entry:
                     self.assertNotRegex(entry[key], r'[|&;<>$`*?(){}\\]', f'{name} {key} needs a shell')
@@ -95,11 +150,18 @@ class Profile(unittest.TestCase):
             if entry.get('install', '').startswith('cargo +stable install'):
                 self.assertLess(order.index('stable'), order.index(name), name)
         self.assertEqual(PROFILE['tools']['toml']['programs'], ['stable', 'taplo', 'cargo-sort'])
-        # A program that cargo installs at a fixed version is checked for that version, so an old one is replaced.
+        # A program that cargo installs at a fixed version has that version as its floor, so an old one is replaced,
+        # and a newer one passes: no expect pins the minor line.
         for name, entry in programs.items():
             if entry.get('install', '').startswith('cargo +stable install'):
-                version = entry['install'].rsplit('@', 1)[1]
-                self.assertTrue(version.startswith(entry['expect'].rsplit(' ', 1)[1]), name)
+                self.assertEqual(entry['version'], '>=' + entry['install'].rsplit('@', 1)[1], name)
+                self.assertNotIn('expect', entry, name)
+        # Each floor is >=X.Y.Z, as jnterfaces reads it.
+        for name, entry in programs.items():
+            if 'version' in entry:
+                self.assertRegex(entry['version'], r'^>=\d+\.\d+\.\d+$', name)
+        self.assertEqual({name for name, entry in programs.items() if 'version' in entry},
+                         {'rustup', 'cargo-llvm-cov', 'taplo', 'cargo-sort', 'nightly'})
         self.assertNotIn('toml', PROFILE['default_tools'])
 
     def test_each_check_passes_here_where_the_lab_has_every_program(self):
@@ -112,7 +174,7 @@ class Profile(unittest.TestCase):
                                   env=dict(os.environ, RUSTUP_AUTO_INSTALL='0'))
             with self.subTest(program=entry['name']):
                 self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertIn(entry.get('expect', ''), done.stdout)
+                self.assertTrue(ci_programs.meets(entry, done.stdout, done.stderr), done.stdout)
 
     def test_the_language_layer_has_a_file_for_each_target(self):
         # The agentic targets of agent_gest_git_skills read .agents/targets/LANGUAGE/TARGET.md, and the target that

@@ -32,11 +32,11 @@ jobs:
             ~/.cargo/bin/taplo
             ~/.cargo/bin/cargo-sort
             ~/.cargo/bin/jlog
-          key: cargo-bin-${{ runner.os }}-${{ hashFiles('profile.json') }}-jlog-v0.1.1
+          key: cargo-bin-${{ runner.os }}-${{ hashFiles('profile.json') }}-jlog-v0.2.0
       - name: Install the Rust programs of profile.json, the pinned nightly and cargo-llvm-cov among them
         run: python3 lab/ci_programs.py
-      - name: Install jlog v0.1.1, which the jnterfaces installer needs
-        run: command -v jlog || cargo +stable install --locked --git https://github.com/rahuldave/jlog --tag v0.1.1
+      - name: Install jlog v0.2.0, which the jnterfaces installer needs
+        run: command -v jlog || cargo +stable install --locked --git https://github.com/rahuldave/jlog --tag v0.2.0
       - name: Get nossaifd, whose check.py the prose check runs
         shell: bash
         run: |
@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/packages"
           git clone --quiet https://github.com/rahuldave/jnterfaces.git "$RUNNER_TEMP/packages/jnterfaces"
-          git -C "$RUNNER_TEMP/packages/jnterfaces" checkout --quiet 338ca39105397177d51fdc1bbb555b80f2bc22de
+          git -C "$RUNNER_TEMP/packages/jnterfaces" checkout --quiet 8d8885f2b8245fea28e643f0c1d2539a26480f18
           echo "SKILL_PACKAGES_DIR=$RUNNER_TEMP/packages" >> "$GITHUB_ENV"
       - name: Check
         run: just check

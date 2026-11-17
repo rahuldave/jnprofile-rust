@@ -2,12 +2,12 @@
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
 SKILL_PACKAGES_DIR/jnterfaces, else in ../jnterfaces next to this repository. BASE has the rust entry of jnterfaces#34,
-the programs of jnterfaces#39, jlog v0.1.1 and the order of #52. The fixed commit keeps the lab the same when the clone
-moves on. It installs this working tree as the package jnprofile-rust, as tests/test_install_stack.py of jnterfaces
-makes its profile packages. The roles tasker and prose come from small stand-in packages. The lab needs git, just,
-rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that it installs. It skips when a check of such a
-program fails, so that the installer of the lab never installs a program on the machine. It runs offline after the first
-run.
+the programs of jnterfaces#39, the order of #52, and the version floors of #57 with jlog v0.2.0. The fixed commit keeps
+the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
+tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
+stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that
+it installs. It skips when a check of such a program fails, so that the installer of the lab never installs a program on
+the machine. It runs offline after the first run.
 """
 import json
 import os
@@ -21,6 +21,8 @@ import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'lab'))
+import ci_programs  # noqa: E402
 # The clone of jnterfaces: JNTERFACES, else jnterfaces in the folder of package clones SKILL_PACKAGES_DIR, as in CI,
 # else ../jnterfaces.
 PACKAGES_DIR = os.environ.get('SKILL_PACKAGES_DIR')
@@ -28,9 +30,10 @@ JNTERFACES = Path(os.environ.get('JNTERFACES')
                   or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#55. It installs the programs of a profile (#39), pins jlog v0.1.1 (#44), runs integration
-# before coverage-check (#52), runs integration once in just verify (#54), and pins smalldocs 0.5.12 (#55).
-BASE = '338ca39105397177d51fdc1bbb555b80f2bc22de'
+# The merge of jnterfaces#57. It installs the programs of a profile (#39), runs integration before coverage-check
+# (#52), runs integration once in just verify (#54), pins smalldocs 0.5.12 (#55), and reads the version floors of
+# programs and pins jlog v0.2.0 (#57).
+BASE = '8d8885f2b8245fea28e643f0c1d2539a26480f18'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -119,13 +122,16 @@ INSTALLING = 'failed, so the installer runs'
 PROFILE = json.loads((REPO / 'profile.json').read_text())
 
 
-def missing_programs(names, env=None):
-    """The programs of NAMES whose check fails, or does not print its expect, in an empty folder with no pin.
-    RUSTUP_AUTO_INSTALL=0 stops rustup from installing a missing toolchain during a check."""
+def missing_programs(names, env=None, pin=None):
+    """The programs of NAMES whose check fails, or does not print its expect or meet its floor, in an empty folder.
+    With PIN, the folder has a rust-toolchain.toml that pins that toolchain. RUSTUP_AUTO_INSTALL=0 stops rustup from
+    installing a missing toolchain during a check."""
     programs = {entry['name']: entry for entry in PROFILE['programs']}
     env = dict(env or os.environ, RUSTUP_AUTO_INSTALL='0')
     missing = []
     with tempfile.TemporaryDirectory() as folder:
+        if pin:
+            (Path(folder) / 'rust-toolchain.toml').write_text(f'[toolchain]\nchannel = "{pin}"\n')
         for name in names:
             entry = programs[name]
             try:
@@ -134,7 +140,7 @@ def missing_programs(names, env=None):
             except (OSError, subprocess.TimeoutExpired):
                 missing.append(name)
                 continue
-            if done.returncode or entry.get('expect', '') not in done.stdout:
+            if done.returncode or not ci_programs.meets(entry, done.stdout, done.stderr):
                 missing.append(name)
     return missing
 
@@ -184,6 +190,23 @@ class Guard(unittest.TestCase):
                              ['toolchain', 'rustfmt', 'llvm-tools'])
             self.assertEqual(os.listdir(home), ['settings.toml'])
 
+    def test_no_check_downloads_a_toolchain_that_the_project_pins_and_lacks(self):
+        # Each check of the profile runs in a project that pins a toolchain rustup does not have. The checks of
+        # rustup and taplo pass, as neither needs a toolchain. Every other check fails and leaves RUSTUP_HOME as it
+        # was: no toolchain, no download. The servers point at a closed port in case one tried.
+        # This holds for rustup 1.28.0 or later, the floor of rustup: an older one installs during rustup --version.
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / 'settings.toml').write_text('version = "12"\ndefault_toolchain = "stable"\n')
+            env = {k: v for k, v in os.environ.items() if not k.startswith('RUSTUP_')}
+            env.update(RUSTUP_HOME=home, RUSTUP_DIST_SERVER='http://127.0.0.1:9',
+                       RUSTUP_UPDATE_ROOT='http://127.0.0.1:9/rustup')
+            names = [entry['name'] for entry in PROFILE['programs']]
+            expected = [name for name in names if name not in ('rustup', 'taplo')]
+            if not shutil.which('taplo'):
+                expected = [name for name in names if name != 'rustup']
+            self.assertEqual(missing_programs(names, env, pin='1.70.0'), expected)
+            self.assertEqual(os.listdir(home), ['settings.toml'])
+
 
 @unittest.skipUnless(os.environ.get('CI', '').strip().lower() not in ('', 'false', '0'), 'only in CI')
 class Ci(unittest.TestCase):
@@ -231,9 +254,24 @@ class Pin(unittest.TestCase):
             text = (REPO / page).read_text()
             self.assertIn(f'`{BASE[:7]}`', text, page)
             # No other commit of the lab: the old pins are gone.
-            for old in ('f9e66f7', '7fe6811', '4b9b52d'):
+            for old in ('f9e66f7', '7fe6811', '4b9b52d', '338ca39'):
                 self.assertNotIn(old, text, page)
         self.assertIn('`2cfb176`', (REPO / 'docs/jnterfaces-entry.md').read_text())
+
+    def test_the_floor_check_of_the_lab_agrees_with_tools_check_of_jnterfaces(self):
+        # ci_programs.meets copies the rules of .agents/tools_check.py at BASE. Run both on the same outputs.
+        source = subprocess.run(['git', '-C', str(JNTERFACES), 'show', f'{BASE}:.agents/tools_check.py'],
+                                capture_output=True, text=True, check=True).stdout
+        tools_check = {}
+        exec(compile(source, 'tools_check.py', 'exec'), tools_check)
+        cases = [('>=0.10.0', 'taplo 0.10.0\n', ''), ('>=0.10.0', 'taplo 0.9.9\n', ''), ('>=1.2', 'x 1.2\n', ''),
+                 ('>=1.102.0', 'rustc 1.102.0-nightly (3ef0c22cd 2026-11-11)\n', ''), ('>=1.0.0', '', 'v 1.2.3\n'),
+                 ('>=1.0.0', 'none\n', 'none\n'), ('>=1.0.0', 'x 0.9.0\n', 'x 1.2.3\n'), ('>=2.1.4', '11.2.1.4', '')]
+        for floor, output, errors in cases:
+            with self.subTest(floor=floor, output=output, errors=errors):
+                found = tools_check['found_version'](output) or tools_check['found_version'](errors)
+                theirs = found is not None and found >= tools_check['parse_floor'](floor)
+                self.assertEqual(ci_programs.meets({'version': floor}, output, errors), theirs)
 
 
 @unittest.skipUnless(READY, WHY)
