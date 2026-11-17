@@ -22,15 +22,15 @@ The installer checks the programs of each tool that it installs, in the project 
 
 | Program | Use | Install |
 |---|---|---|
-| `rustup` | Every step | https://rustup.rs/. The installer stops if it is missing. |
+| `rustup` 1.28.0 or later | Every step | https://rustup.rs/. The installer stops if it is missing or older. An older rustup installs a missing pinned toolchain during a check |
 | The toolchain, with `cargo` | Every step | The profile runs `rustup toolchain install` when the toolchain that `rust-toolchain.toml` or `rust-toolchain` pins is missing. With no pin and no default toolchain, run `rustup default stable` yourself |
 | `rustfmt` and `clippy` | `fmt`, `fmt-check`, `lint` and `docstring-check` | The profile runs `rustup component add` |
-| `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test`, `integration` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1` |
+| `llvm-tools-preview` and `cargo-llvm-cov` | The coverage of `test`, `integration` and `coverage-check` | The profile runs `rustup component add llvm-tools-preview` and `cargo +stable install --locked cargo-llvm-cov@0.9.1`. Version 0.9.1 or later passes the check |
 | The nightly toolchain `nightly-2026-11-12` | `api-check`, through smalldocs and rustdoc | The profile runs `rustup toolchain install nightly-2026-11-12 --profile minimal` in the home folder. It does not change the default toolchain |
-| `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4` |
+| `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4`. These versions or later pass the check |
 | `just` | Every recipe | `cargo install just` |
 | `uv` | `diff-cover` and the helper script of the steps | https://docs.astral.sh/uv/ |
-| `jlog` v0.1.1 | `just install` of jnterfaces, which runs each step through it | Clone https://github.com/rahuldave/jlog, run `git checkout v0.1.1`, then `just install` there |
+| `jlog` v0.2.0 | `just install` of jnterfaces, which runs each step through it | Clone https://github.com/rahuldave/jlog, run `git checkout v0.2.0`, then `just install` there |
 
 ## The steps
 
