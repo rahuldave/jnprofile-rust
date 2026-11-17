@@ -65,8 +65,12 @@ the other tests with this command:
 just test
 ```
 
-`just check` runs the lint, the tests, the check of the prose and the check of
-the site.
+`just check` runs `release-check`, the lint, the tests, the check of the prose
+and the check of the site. `just release-check` prints the next tag, and needs
+no network. This repository has no `Cargo.toml`, so the tag comes from the
+commits since the last tag. `just release` tags HEAD with the next release
+`vX.Y.Z`, pushes the tag and checks it. `just release --dry-run` prints the tag
+and changes nothing.
 
 CI runs `just check` on each push and each pull request, with the workflow
 `.github/workflows/verify.yml`. It installs the programs of `profile.json` with
@@ -74,6 +78,13 @@ their own install lines, so CI and the profile have the same pins. It clones
 jnterfaces at the commit of the lab into the folder that `SKILL_PACKAGES_DIR`
 names, and nossaifd at a fixed commit. In CI, a lab that cannot run fails, and
 does not skip.
+
+On each push to `main`, the job `release` of `.github/workflows/verify.yml`
+runs `just release` after the job `verify` passes. Only that job can write to
+the repository, to push the tag. So nobody tags by hand. The script is
+`scripts/release_tag.py`, a copy of the script of the gpa skill of
+agent_gest_git_skills. The section "Release tags" of its
+`docs/integration_delivery_workflow.md` gives the rules.
 
 ## License
 

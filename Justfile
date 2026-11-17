@@ -21,7 +21,7 @@ lint:
     {{ruff}} check .
     {{python}} -m json.tool profile.json > /dev/null
     {{python}} -m json.tool skill-package.json > /dev/null
-    {{python}} -m py_compile .agents/just/rust/steps.py .agents/just/rust/api_rule.py lab/lint_just.py lab/prose_check.py lab/ci_programs.py tests/test_lab.py tests/test_steps.py tests/test_profile.py tests/test_api.py
+    {{python}} -m py_compile .agents/just/rust/steps.py .agents/just/rust/api_rule.py lab/lint_just.py lab/prose_check.py lab/ci_programs.py scripts/release_tag.py tests/test_lab.py tests/test_release.py tests/test_steps.py tests/test_profile.py tests/test_api.py
     {{python}} lab/lint_just.py .agents/just/rust
 
 # Run the tests and the lab. Extra arguments go to unittest: just test tests.test_steps. JNTERFACES names jnterfaces, else
@@ -34,7 +34,20 @@ prose-check:
     {{python}} lab/prose_check.py {{quote(checker)}} README.md docs/index.md docs/tools.md docs/jnterfaces-entry.md .agents/skills/rust-profile/SKILL.md .agents/targets/rust/review.md .agents/targets/rust/test-review.md .agents/targets/rust/update-docs.md .agents/targets/rust/prose.md
 
 # Everything a commit must pass
-check: lint test prose-check docs-check
+check: release-check lint test prose-check docs-check
+
+# The release tags. scripts/release_tag.py is a copy of .agents/skills/gpa/scripts/release_tag.py of
+# agent_gest_git_skills at the commit 799a44b. The job release of verify.yml runs just release on each push to main
+release_tag := "uv run --no-project --quiet --no-python-downloads --python '>=3.9' python scripts/release_tag.py"
+
+# Tag HEAD with the next release vX.Y.Z by semver, push the tag and check it. Takes --dry-run first
+[positional-arguments]
+release *args:
+    @{{release_tag}} "$@"
+
+# Print the next tag, or fail on a git error. It needs no network and no remote
+release-check:
+    {{release_tag}} --check
 
 # The documentation site, from docs/, with smalldocs.
 smalldocs := "uvx --quiet smalldocs@0.5.12"

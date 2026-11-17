@@ -81,6 +81,20 @@ class Floor(unittest.TestCase):
             self.assertTrue(ci_programs.works(taplo, folder, env))
 
 
+
+class Release(unittest.TestCase):
+    """just release passes its words to the script, so just release --dry-run makes no tag."""
+
+    def test_release_has_positional_arguments_of_its_own(self):
+        # Without positional arguments "$@" is empty, and just release --dry-run would tag and push. The attribute on
+        # the recipe keeps it so when the setting at the top of the Justfile goes.
+        dump = json.loads(subprocess.run(['just', '--dump', '--dump-format', 'json'], cwd=REPO, capture_output=True,
+                                         text=True, check=True).stdout)
+        release = dump['recipes']['release']
+        self.assertIn('positional-arguments', release['attributes'])
+        self.assertIn('"$@"', ''.join(part for part in release['body'][0] if isinstance(part, str)))
+
+
 class Profile(unittest.TestCase):
     def test_it_finds_a_rust_project_by_cargo_toml_and_names_the_code(self):
         self.assertEqual(PROFILE['name'], 'rust')
