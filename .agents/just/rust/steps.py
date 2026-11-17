@@ -1210,6 +1210,53 @@ def base_option(args):
     return ref
 
 
+# A semver 2.0 version, as cargo takes it: X.Y.Z with no leading zeros, then an optional prerelease and build.
+SEMVER = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+                    r'(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?')
+
+
+def version(manifest=Path('Cargo.toml')):
+    """Print the version of the project from the root MANIFEST, for the release tag vX.Y.Z, and return the exit code.
+
+    The version is [package] version, or [workspace.package] version when the package inherits it or the root has
+    no package. No manifest, or no version in it, prints nothing and gives 0. A manifest that cannot be read or
+    parsed, or a version that is not a string, gives 2. It reads the file with tomllib only, so it runs no cargo,
+    starts no download and writes nothing. The version must be semver, as cargo asks, so the tag is v plus the text
+    of the manifest.
+    """
+    try:
+        # cargo reads a manifest that starts with a byte order mark, so this does too.
+        data = tomllib.loads(manifest.read_text(encoding='utf-8-sig'))
+    except FileNotFoundError:
+        if manifest.is_symlink():
+            print(f'version: {manifest} is a symlink to a missing file', file=sys.stderr)
+            return 2
+        return 0
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        print(f'version: cannot read {manifest}: {error}', file=sys.stderr)
+        return 2
+    workspace = data.get('workspace')
+    shared = workspace.get('package') if isinstance(workspace, dict) else None
+    shared = shared.get('version') if isinstance(shared, dict) else None
+    package = data.get('package')
+    if isinstance(package, dict):
+        found = package.get('version')
+        if isinstance(found, dict) and found.get('workspace') is True:
+            if shared is None:
+                print(f'version: {manifest} inherits the version, but [workspace.package] has none', file=sys.stderr)
+                return 2
+            found = shared
+    else:
+        found = shared
+    if found is None:
+        return 0
+    if not isinstance(found, str) or not SEMVER.fullmatch(found):
+        print(f'version: the version in {manifest} is not a semver version such as 1.2.3', file=sys.stderr)
+        return 2
+    print(found)
+    return 0
+
+
 def main(argv):
     """Run the command of ARGV and return its exit code, as the usage at the end lists the commands."""
     if len(argv) >= 2 and argv[0] == 'run' and argv[1] in COVERED:
@@ -1235,6 +1282,8 @@ def main(argv):
     if argv[:2] == ['api', 'prose']:
         option = base_option(argv[2:])
         return option if isinstance(option, int) else api('prose', option or None)
+    if argv == ['version']:
+        return version()
     if argv[:1] == ['pages'] and len(argv) >= 3:
         return pages(argv[1], argv[2], argv[3:])
     if argv[:1] == ['config'] and len(argv) == 3:
@@ -1242,7 +1291,7 @@ def main(argv):
         return own if isinstance(own, int) else 0
     print('usage: steps.py run STEP [ARG...] | fresh STEP | coverage | docs | test-paths [PATH...] | toml [--check] | '
           'ran prose [ARG...] | begin prose [ARG...] | stamp prose | api check | api prose [--base REF] | '
-          'pages DOCS OUT [FILE...] | config DOCS OUT, where STEP is test or integration', file=sys.stderr)
+          'version | pages DOCS OUT [FILE...] | config DOCS OUT, where STEP is test or integration', file=sys.stderr)
     return 2
 
 

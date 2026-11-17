@@ -788,6 +788,103 @@ class Repository(unittest.TestCase):
             self.assertEqual(steps.main(['nothing']), 2)
         self.assertIn('usage', err.getvalue())
 
+class Version(unittest.TestCase):
+    """The recipe rust::version, which prints the version for the release tag."""
+
+    def run_on(self, text=None, raw=None):
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = Path(temp) / 'Cargo.toml'
+            if raw is not None:
+                manifest.write_bytes(raw)
+            elif text is not None:
+                manifest.write_text(text)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = steps.version(manifest)
+            return code, out.getvalue(), err.getvalue()
+
+    def test_a_package_prints_its_version(self):
+        self.assertEqual(self.run_on('[package]\nname = "a"\nversion = "1.2.3"\n'), (0, '1.2.3\n', ''))
+
+    def test_a_workspace_root_with_no_package_prints_the_workspace_version(self):
+        text = '[workspace]\nmembers = ["a"]\n[workspace.package]\nversion = "0.4.0"\n'
+        self.assertEqual(self.run_on(text), (0, '0.4.0\n', ''))
+
+    def test_a_package_that_inherits_takes_the_workspace_version(self):
+        text = '[package]\nname = "a"\nversion.workspace = true\n[workspace]\n[workspace.package]\nversion = "2.0.1"\n'
+        self.assertEqual(self.run_on(text), (0, '2.0.1\n', ''))
+
+    def test_no_manifest_or_no_version_prints_nothing(self):
+        self.assertEqual(self.run_on(), (0, '', ''))
+        self.assertEqual(self.run_on('[package]\nname = "a"\n'), (0, '', ''))
+        self.assertEqual(self.run_on('[workspace]\nmembers = []\n'), (0, '', ''))
+
+    def test_a_package_with_no_version_does_not_take_the_workspace_version(self):
+        text = '[package]\nname = "a"\n[workspace]\n[workspace.package]\nversion = "9.9.9"\n'
+        self.assertEqual(self.run_on(text), (0, '', ''))
+
+    def test_a_bom_and_crlf_and_an_inline_inheritance_are_read(self):
+        self.assertEqual(self.run_on(raw=b'\xef\xbb\xbf[package]\r\nname = "a"\r\nversion = "1.0.0"\r\n'),
+                         (0, '1.0.0\n', ''))
+        text = '[package]\nname = "a"\nversion = {workspace = true}\n[workspace.package]\nversion = "1.1.0"\n'
+        self.assertEqual(self.run_on(text), (0, '1.1.0\n', ''))
+        self.assertEqual(self.run_on('[package]\nversion = "1.0.0-rc.1+build.5"\n'), (0, '1.0.0-rc.1+build.5\n', ''))
+
+    def test_a_bad_file_exits_2_with_a_message(self):
+        bad = [b'[package\n', b'\xff\xfe', b'[package]\nversion = 5\n', b'[package]\nversion = ""\n',
+               b'[package]\nversion = "v1.0.0"\n', b'[package]\nversion = " 1.0.0 "\n',
+               b'[package]\nversion = "01.0.0"\n', b'[package]\nversion = "1.0"\n',
+               b'[package]\nversion = "latest/../x"\n', b'[package]\nversion = "1.0.0\\nevil"\n',
+               b'[package]\nversion.workspace = false\n', b'[package]\nversion.workspace = true\n']
+        for raw in bad:
+            code, out, err = self.run_on(raw=raw)
+            self.assertEqual((code, out), (2, ''), raw)
+            self.assertIn('version:', err)
+
+    def test_a_folder_a_dangling_link_and_a_locked_file_exit_2(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp) / 'folder' / 'Cargo.toml'
+            folder.mkdir(parents=True)
+            link = Path(temp) / 'link' / 'Cargo.toml'
+            link.parent.mkdir()
+            link.symlink_to(Path(temp) / 'missing')
+            locked = Path(temp) / 'locked' / 'Cargo.toml'
+            locked.parent.mkdir()
+            locked.write_text('[package]\nversion = "1.0.0"\n')
+            locked.chmod(0)
+            cases = [folder, link] + ([locked] if os.geteuid() != 0 else [])
+            for manifest in cases:
+                with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(steps.version(manifest), 2, manifest)
+                self.assertEqual(out.getvalue(), '')
+            locked.chmod(0o600)
+
+    def test_main_runs_version_and_refuses_extra_arguments(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
+            Path('Cargo.toml').write_text('[package]\nversion = "0.3.0"\n')
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(steps.main(['version']), 0)
+            self.assertEqual(out.getvalue(), '0.3.0\n')
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(steps.main(['version', 'x']), 2)
+            self.assertEqual(out.getvalue(), '')
+
+    def test_the_recipe_fails_through_just_with_nothing_on_stdout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'Cargo.toml').write_text('[package]\nversion = "v1.0.0"\n')
+            module = REPO / '.agents/just/rust/base.just'
+            done = subprocess.run(['just', '--justfile', str(module), '--working-directory', temp, 'version'],
+                                  capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout), (2, ''))
+        self.assertIn('semver', done.stderr)
+
+    def test_the_recipe_prints_the_version_through_just(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'Cargo.toml').write_text('[package]\nname = "a"\nversion = "3.1.4"\n')
+            module = REPO / '.agents/just/rust/base.just'
+            done = subprocess.run(['just', '--justfile', str(module), '--working-directory', temp, 'version'],
+                                  capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout), (0, '3.1.4\n'), done.stderr)
 
 if __name__ == '__main__':
     unittest.main()

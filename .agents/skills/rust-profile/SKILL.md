@@ -21,7 +21,7 @@ first.
 
 | Tool | Recipes | What the steps check |
 |---|---|---|
-| none, always there | `setup`, `build` | nothing |
+| none, always there | `setup`, `build`, `version` | nothing |
 | `lint` | `fmt`, `fmt-check`, `lint` | the format with rustfmt, and each clippy warning as an error |
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
 | `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
