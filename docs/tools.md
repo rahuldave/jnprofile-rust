@@ -67,7 +67,7 @@ The report of `integration` counts only when `integration` is in the steps of `j
 
 `diff-cover` counts only the files that are in the report. `cargo llvm-cov` leaves out a file that no test target compiles, such as a file that no `mod` line names, or a file in `examples/`. It also leaves out each file in a folder named `tests`, `examples` or `benches`, at any depth, for example `src/tests/mod.rs`.
 
-So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, and the files of the two lists. On the first commit, the step checks only the files in the reports. The build script `build.rs` is in the report.
+So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, and the files of the two lists. On the first commit, the step checks only the files in the reports. Workspace build scripts may be in the report. Dependency reporting scope and copied source paths can omit files that execute. Absence alone does not prove that no test runs a file.
 
 LLVM counts the code of a `macro_rules!` macro at the line that calls the macro. So a branch of a macro that no test runs does not fail `coverage-check`, and the `test-review` target checks it.
 
@@ -157,7 +157,7 @@ With the key `api` in `docs/_smalldocs.yml`, the crates are those of its Rust se
 
 In a crate with a library, the files are `src/lib.rs` and the modules under `src/`. In a crate with only a binary, they are `src/main.rs` and its modules. The binaries in `src/bin/`, the tests, the examples, `build.rs` and the files of `.agents/generated.txt` are not API files. The rule reads no TOML, so a library at another path, with `path` in `[lib]`, does not count. `api-prose-check` takes its changed files by the same rule, without the check of the tool and the role.
 
-## Lines that no test can run
+## Reviewed coverage exclusions
 
 Stable Rust has no pragma that leaves out one line from the coverage. So the profile reads two lists of files:
 
@@ -168,6 +168,29 @@ Each line of a list is a path or a glob, with the rules of git pathspecs. A `*` 
 
 The steps read both lists from the parent commit, with `git show HEAD:./PATH`, which names the path from the top of the project. So a new entry counts only after it is in a commit of its own, and a commit cannot exempt its own code. With no parent, or when the parent has no such file, the list is empty. The `test-review` target judges each new entry.
 
+Independent review may also accept exact `coverage-exclude.txt` paths for unchanged source from a pinned
+third-party release. Review must precede the import, and the entries need a separate prior commit.
+Each comment must name the release, reason and review evidence. No glob or folder entry qualifies.
+
+The review requires the complete archive digest and inventory, accounts for every imported path and local
+change, and proves byte identity for each excluded file. The project must always check complete source and
+provenance in `just check` and CI. A staged commit guard must check the inventory and bytes to be committed.
+
+The profile does not implement these project checks or infer exemptions from dependency paths.
+
+Keep meaningful caller behavior and regression tests. Integrity replaces first-import line coverage only;
+it never qualifies runtime behavior. Each release or byte change needs new independent review.
+First-party and locally adapted Rust files cannot use this exception.
+
+Handwritten upstream build scripts
+and helpers remain reachable logic. Actual generated bindings belong in `generated.txt` with their reason.
+The shipped Rust `test-review` rules give the full review conditions.
+
 ## The helper script
 
 The recipes of `coverage-check`, `docstring-check`, `test-paths` and `api-check` run `.agents/just/rust/steps.py` with `uv`. The script needs Python 3.11 or later and no package. The api commands run it again under smalldocs, whose PyYAML reads `docs/_smalldocs.yml`. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in `target/jnprofile-rust/`. It also reads the JSON messages of clippy, and prints each item with no doc. `coverage-check` runs `diff-cover` 11.0.1 with `uv run --with`.
+
+## Recommendations
+
+Prefer tests and coverage for reachable code. For an unchanged upstream import, review the exact exclusions
+and the project source checks first, then commit the exclusions before the import.

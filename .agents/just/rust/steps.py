@@ -478,10 +478,11 @@ def test_file(path):
 
 
 def unreported(changed, lines, excluded):
-    """The files of CHANGED that are not in the report, not excluded and not test files: no test can cover them.
+    """The files of CHANGED that are not in the report, not excluded and not test files.
 
     cargo llvm-cov leaves out a file that no test target compiles, such as a file that no mod names or a file in
-    examples. It also leaves out each file in a folder named tests, examples or benches, at any depth.
+    examples. Reporting scope or copied source paths can also omit a file that runs. Absence alone does not
+    prove that no test runs the file.
     """
     return [path for path in changed if path not in lines and not excluded(path) and not test_file(path)]
 
@@ -532,15 +533,15 @@ def coverage():
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
     for path in missing:
-        print(f'{path}: a changed file that is not in the coverage report, so no test runs it')
+        print(f'{path}: a changed file that is absent from the coverage report')
     if missing:
-        print('coverage-check: no test target compiles these files, or cargo llvm-cov leaves out their folder. Call '
-              'the code from a test, move it out of a folder named tests or examples, or exclude the file',
+        print('coverage-check: inspect test targets, reporting scope or copied source paths; absence does not prove '
+              'that no test runs a file. Add coverage or seek independent review under the Rust test-review rules',
               file=sys.stderr)
         code = code or 1
     if code:
-        print('coverage-check: write tests for the missing lines. A file that no test can run goes in '
-              f'{COVERAGE_EXCLUDE}, in a commit of its own before this one', file=sys.stderr)
+        print('coverage-check: write tests for missing lines. Any permitted exclusion needs independent review and '
+              f'a separate prior commit in {COVERAGE_EXCLUDE}; see the Rust test-review rules', file=sys.stderr)
     return code
 
 
