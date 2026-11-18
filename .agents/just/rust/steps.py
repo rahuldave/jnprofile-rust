@@ -37,8 +37,10 @@ BROKE = re.compile(r'^error: (?:test failed|could not compile|failed to run cust
 # What cargo prints when no test target matches the name or the pattern.
 NO_TARGET = re.compile(r'^error: no test target matches pattern', re.M)
 # The line of cargo for each test binary that it starts, in its exact form, so a line that a test leaks, such as
-# that of a cargo run inside a test, does not match. A binary with harness = false prints no test result.
-RUNNING = re.compile(r'^     Running (?:unittests )?[^`\s].* \(\S*deps[/\\]\S+\)$', re.M)
+# that of a cargo run inside a test, does not match. A binary with harness = false prints no test result. The binary is
+# in target/debug/deps, or, with the build-dir layout of newer cargo, in target/debug/build/<package>/<hash>/out. The
+# folder deps or out is a whole part of the path, and the path may hold a space, as a build-dir under a home folder can.
+RUNNING = re.compile(r'^     Running (?:unittests )?[^`\s].* \((?:[^()\n]*[/\\])?(?:deps|out)[/\\][^/\\()\n]+\)$', re.M)
 # The line of libtest that announces how many tests a binary will run.
 ANNOUNCED = re.compile(r'^running (\d+) tests?$', re.M)
 # The escape codes of terminal colors, which a test may still print.
