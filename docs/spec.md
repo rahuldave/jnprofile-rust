@@ -115,7 +115,7 @@ anything. When one is missing, it stops and prints the install line.
 | `git` | Everything | The system package manager. |
 | `just` | All recipes | `cargo install just` or the system package manager. |
 | `uv` | Python, the installer, smalldocs, nossaifd, the plugins | https://docs.astral.sh/uv/ |
-| `jlog` | The run log, as the shell of each recipe | `git clone https://github.com/rahuldave/jlog`, then `just install` in the clone. |
+| `jlog` | The run log, as the shell of each recipe | Run the command under this table, then put `~/.local/bin` on `PATH`. Or build it: `git clone https://github.com/rahuldave/jlog`, run `git checkout v0.3.0`, then `just install` in the clone. |
 | `jagt` | Agentic targets. Version 0.3.0 or later, for the nonce. | `cargo install --git https://github.com/rahuldave/jagt` |
 | `gest` | The task tracker, from the fork of rahuldave | `git clone https://github.com/rahuldave/gest`, then `cargo install --path gest --locked`. On 2026-11-12, `cargo install --git` of the fork failed at the checkout with "the repository is not empty". |
 | `gh` | Publishing, GitHub issues | https://cli.github.com/ |
@@ -125,6 +125,12 @@ anything. When one is missing, it stops and prints the install line.
 | `node` | The TypeScript profile | Through `uv`, as the profile does now. |
 | `cargo-llvm-cov` | `coverage-check` in the Rust profile, with the rustup component `llvm-tools-preview` | `cargo install cargo-llvm-cov`, and `rustup component add llvm-tools-preview` |
 | `cargo` | The Rust profile, and the builds of `just`, `jlog`, `jagt` and `gest` | https://rustup.rs/ |
+
+This command installs the release binary of jlog:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rahuldave/jlog/v0.3.0/scripts/install.sh | sh -s -- --tag v0.3.0
+```
 
 - **The other new tools come through the profiles.** `diff-cover` and
   `interrogate` run with `uv run --with`, in any language. eslint and

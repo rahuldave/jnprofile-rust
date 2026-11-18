@@ -30,7 +30,13 @@ The installer checks the programs of each tool that it installs, in the project 
 | `taplo` and `cargo-sort` | The tool `toml`, if you install it | The profile runs `cargo +stable install --locked taplo-cli@0.10.0` and `cargo +stable install --locked cargo-sort@2.1.4`. These versions or later pass the check |
 | `just` | Every recipe | `cargo install just` |
 | `uv` | `diff-cover` and the helper script of the steps | https://docs.astral.sh/uv/ |
-| `jlog` v0.2.0 | `just install` of jnterfaces, which runs each step through it | Clone https://github.com/rahuldave/jlog, run `git checkout v0.2.0`, then `just install` there |
+| `jlog` v0.3.0 | `just install` of jnterfaces, which runs each step through it | Run the command under this table, then put `~/.local/bin` on `PATH`. It downloads the release binary and checks its SHA-256. To build it from source, clone https://github.com/rahuldave/jlog, run `git checkout v0.3.0`, then `just install` there |
+
+This command installs the release binary of jlog:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rahuldave/jlog/v0.3.0/scripts/install.sh | sh -s -- --tag v0.3.0
+```
 
 ## The steps
 

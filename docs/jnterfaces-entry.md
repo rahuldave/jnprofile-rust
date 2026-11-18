@@ -2,7 +2,7 @@
 title: The jnterfaces entry
 ---
 
-jnterfaces#34 took the entry for the rust profile and the change to its installer. This page keeps both as a record. The change was made against jnterfaces at commit `2cfb176`. jnterfaces#39 then taught the installer the key `programs`. The lab of this repository copies jnterfaces at commit `8d8885f`, and installs the profile with that copy. That commit has both, pins jlog v0.2.0, runs `integration` before `coverage-check`, and pins smalldocs 0.5.12.
+jnterfaces#34 took the entry for the rust profile and the change to its installer. This page keeps both as a record. The change was made against jnterfaces at commit `2cfb176`. jnterfaces#39 then taught the installer the key `programs`. The lab of this repository copies jnterfaces at commit `99b12a5`, and installs the profile with that copy. That commit has both, installs jlog v0.3.0 from its release binary, runs `integration` before `coverage-check`, and pins smalldocs 0.5.12.
 
 ## The entry in stack.json
 
