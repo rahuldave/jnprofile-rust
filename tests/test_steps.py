@@ -684,6 +684,41 @@ class Repository(unittest.TestCase):
         self.assertRegex('     Running unittests src/lib.rs (target/debug/deps/app-1)', steps.RUNNING)
         self.assertRegex('     Running tests\\api.rs (target\\debug\\deps\\api-1.exe)', steps.RUNNING)
 
+    def test_test_paths_reads_the_binaries_of_the_build_dir_layout_of_newer_cargo(self):
+        # The cargo of the ubuntu-24.04 image of 2026-11-16 puts each test binary in target/debug/build/<package>/
+        # <hash>/out, not in target/debug/deps. Its Running line still counts, so the test that ran is seen.
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/api.rs')
+        out = ('   Compiling app v0.1.0 (/tmp/app)\n'
+               '     Running tests/api.rs (target/debug/build/app/b71f777615de6373/out/api-b71f777615de6373)\n\n'
+               'running 1 test\ntest add_works_from_outside ... ok\n\n'
+               'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n')
+        with mock.patch.object(steps, 'run_streamed', return_value=(0, out)), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.test_paths(['tests/api.rs']), 0)
+        self.assertRegex('     Running unittests src/lib.rs (target/debug/build/app/1f/out/app-1f)', steps.RUNNING)
+        self.assertRegex('     Running tests\\api.rs (target\\debug\\build\\app\\1f\\out\\api-1f.exe)',
+                         steps.RUNNING)
+        # A cargo run that a test leaks still does not count.
+        self.assertNotRegex('     Running `target/debug/build/app/1f/out/leak`', steps.RUNNING)
+        # A folder that only ends in out or deps is no binary folder.
+        self.assertNotRegex('     Running tests/api.rs (target/layout/api-1)', steps.RUNNING)
+        self.assertNotRegex('     Running tests/api.rs (target/mydeps/api-1)', steps.RUNNING)
+
+    def test_test_paths_reads_a_binary_whose_path_holds_a_space(self):
+        # A build-dir outside the project, such as one under the home folder /Users/First Last, gives a path with a
+        # space in the Running line.
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "app"\n')
+        self.files('tests/api.rs')
+        result = ('running 1 test\ntest t ... ok\n\n'
+                  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n')
+        for path in ('../bd build/debug/deps/api-1', '/Users/First Last/.cargo/build/ab/debug/build/app/1/out/api-1',
+                     'C:\\Users\\First Last\\target\\debug\\deps\\api-1.exe'):
+            out = f'     Running tests/api.rs ({path})\n\n' + result
+            with self.subTest(path=path), mock.patch.object(steps, 'run_streamed', return_value=(0, out)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertRegex(out, steps.RUNNING)
+                self.assertEqual(steps.test_paths(['tests/api.rs']), 0)
+
     def test_test_paths_gives_2_for_a_path_that_it_cannot_run(self):
         (self.root / 'Cargo.toml').write_text('[workspace]\n')
         self.files('tests/api.rs')
