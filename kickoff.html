@@ -1,0 +1,75 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="generator" content="smalldocs-0.5.12"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><title>kickoff – jnprofile-rust</title><link rel="icon" href="favicon.svg"><link rel="stylesheet" href="site_libs/themes/atelier/atelier.css" data-mode="light" class="quarto-color-scheme" id="quarto-bootstrap-light" media="not all and (prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/themes/atelier/atelier-dark.css" data-mode="dark" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap-dark" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="site_libs/smalldocs.css"><meta name="smalldocs:offset" content="./"><script src="site_libs/bootstrap/bootstrap.bundle.min.js"></script><script src="site_libs/fuse/fuse.min.js"></script><script src="site_libs/smalldocs.js" defer></script><script>(function(){var d=document.documentElement,s=null;try{s=localStorage.getItem('smalldocs-scheme')}catch(e){}var alt=s?s==='alternate':!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);var ls=document.querySelectorAll('link.quarto-color-scheme');if(alt)d.dataset.scheme='alternate';if(s)ls.forEach(function(l){var on=l.classList.contains('quarto-color-alternate')===alt;if(on)l.setAttribute('blocking','render');l.media=on?'all':'not all'});var on=ls[alt?1:0];if(on&&on.dataset.mode==='dark')d.classList.add('quarto-dark')})();</script></head><body class="nav-fixed"><header id="quarto-header" class="headroom sticky-top"><nav class="navbar navbar-expand-lg sd-navbar-default"><div class="navbar-container container-fluid"><div class="navbar-brand-container mx-auto"><a class="navbar-brand" href="index.html"><span class="navbar-title">jnprofile-rust</span></a></div><button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button><div class="collapse navbar-collapse" id="navbarCollapse"><ul class="navbar-nav navbar-nav-scroll me-auto"><li class="nav-item"><a class="nav-link" href="index.html"><span class="menu-text">Home</span></a></li><li class="nav-item"><a class="nav-link" href="tools.html"><span class="menu-text">Tools</span></a></li><li class="nav-item"><a class="nav-link" href="jnterfaces-entry.html"><span class="menu-text">The jnterfaces entry</span></a></li></ul><ul class="navbar-nav navbar-nav-scroll ms-auto"><li class="nav-item dropdown"><a class="nav-link dropdown-toggle" href="#" id="nav-menu-1" role="link" data-bs-toggle="dropdown" aria-expanded="false"><span class="menu-text">Projects</span></a><ul class="dropdown-menu" aria-labelledby="nav-menu-1"><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnterfaces/"><span class="menu-text">jnterfaces</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-python/"><span class="menu-text">jnprofile-python</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-typescript/"><span class="menu-text">jnprofile-typescript</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-rust/"><span class="menu-text">jnprofile-rust</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/agent_gest_git_skills/"><span class="menu-text">agent_gest_git_skills</span></a></li></ul></li><li class="nav-item compact"><a class="nav-link" href="https://github.com/rahuldave/jnprofile-rust" aria-label="github"><i class="bi bi-github" role="img"></i></a></li><li class="nav-item compact"><a class="quarto-color-scheme-toggle nav-link" href="" title="Toggle dark mode" onclick="window.smalldocsToggleScheme(); return false;"><i class="bi"></i></a></li></ul><div class="quarto-navbar-tools"><div class="smalldocs-search" id="quarto-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" class="form-control form-control-sm" placeholder="Search" aria-label="Search" autocomplete="off"><div class="smalldocs-search-results dropdown-menu"></div></div></div></div></div></nav></header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article has-margin"><div id="quarto-margin-sidebar" class="sidebar margin-sidebar"><nav id="TOC" role="doc-toc" class="toc-active"><h2 id="toc-title">On this page</h2><ul><li><a href="#read-first" id="toc-read-first" class="nav-link" data-scroll-target="#read-first">Read first</a></li><li><a href="#what-to-build" id="toc-what-to-build" class="nav-link" data-scroll-target="#what-to-build">What to build</a></li><li><a href="#github" id="toc-github" class="nav-link" data-scroll-target="#github">GitHub</a></li><li><a href="#rules-of-this-user" id="toc-rules-of-this-user" class="nav-link" data-scroll-target="#rules-of-this-user">Rules of this user</a></li></ul></nav><div class="toc-actions"><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/blob/main/docs/kickoff.md" class="toc-action"><i class="bi bi-code"></i> View source</a></div><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/issues/new" class="toc-action"><i class="bi bi-chat-right"></i> Report an issue</a></div></div></div><main class="content" id="quarto-document-content"><p>You are starting the <code>jnprofile-rust</code> project in ~/Projects/jnprofile-rust. It is the jnterfaces profile for Rust projects. The folder has <code>docs/spec.md</code> and this brief, on branch <code>main</code>, with no commits yet.</p>
+<section id="read-first" class="level2">
+<h2 class="anchored" data-anchor-id="read-first">Read first</h2>
+<ol>
+<li><code>docs/spec.md</code>. It is the full design of the commit gates, and this profile is one part of it. Read these sections closely:
+<ul>
+<li>“Who calls what”</li>
+<li>“The steps”, in particular <code>coverage-check</code> and <code>docstring-check</code></li>
+<li>“Skills and targets”</li>
+<li>“Agentic targets”, the language layer</li>
+<li>“Gates”, the <code>@code</code> globs</li>
+<li>“Where each part lives”</li>
+<li>“Acceptance Criteria”, the profile parts</li>
+</ul>
+</li>
+<li>The two profiles that exist, as models for layout, <code>profile.json</code>, <code>skill-package.json</code>, the <code>.agents/just/&lt;language&gt;/</code> modules, the profile skill and the docs site:
+<ul>
+<li>~/Projects/jnprofile-typescript</li>
+<li>~/Projects/jnprofile-python</li>
+</ul>
+</li>
+<li>~/Projects/jnterfaces, which installs profiles. Read these parts:
+<ul>
+<li><code>stack.json</code>, the key <code>profiles</code></li>
+<li>the installer</li>
+<li><code>scripts/shared_files.py</code> and <code>scripts/formats.json</code></li>
+<li><code>tests/test_install_stack.py</code>, which shows how the tests make profile packages</li>
+<li>the <code>just</code> skill and its command contract</li>
+</ul>
+</li>
+<li>~/Projects/nossaifd, the writing guide <code>GUIDE.md</code> and <code>check.py</code>.</li>
+</ol>
+<p>Treat the other repos as read-only. Make no edits and no git writes, and do not run <code>git fetch</code>.</p>
+</section>
+<section id="what-to-build" class="level2">
+<h2 class="anchored" data-anchor-id="what-to-build">What to build</h2>
+<p>The Rust profile, with the real steps for a Cargo project:</p>
+<ul>
+<li><strong><code>profile.json</code>.</strong> It detects a Rust project by <code>Cargo.toml</code>. It gives the tools, the lines for <code>.gitignore</code> and <code>.worktreedisposable</code> (for example <code>target/</code>), and the <code>@code</code> globs (<code>**/*.rs</code>).</li>
+<li><strong>The modules</strong> in <code>.agents/just/rust/</code>. They fill <code>fmt-check</code>, <code>lint</code>, <code>typecheck</code>, <code>test</code>, <code>coverage-check</code> and <code>docstring-check</code>, as the spec says:
+<ul>
+<li><code>fmt-check</code> runs <code>cargo fmt --check</code>.</li>
+<li><code>lint</code> runs <code>cargo clippy</code> with <code>-D warnings</code>.</li>
+<li><code>docstring-check</code> uses <code>-D missing_docs</code> and <code>-D clippy::missing_docs_in_private_items</code>. Later note: the user approved <code>-W</code> with <code>--cap-lints warn</code> instead, and the spec now says so.</li>
+<li><code>coverage-check</code> uses <code>cargo llvm-cov</code> and <code>diff-cover</code>.</li>
+<li>No recipe has a shebang line, so each line runs through <code>jlog</code>.</li>
+</ul>
+</li>
+<li><strong>The language layer</strong> in <code>.agents/targets/rust/</code>. It holds short Rust rules for the <code>review</code>, <code>test-review</code>, <code>docs</code> and <code>prose</code> targets, for example the <code># Examples</code> and <code># Errors</code> sections of a doc comment. Later note: the spec renamed the <code>docs</code> target to <code>update-docs</code>, so the file is <code>update-docs.md</code>.</li>
+<li><strong>A skill <code>rust-profile</code></strong>, like <code>typescript-profile</code>.</li>
+<li><strong>A <code>skill-package.json</code>.</strong> Its required executables are <code>cargo</code>, <code>cargo-llvm-cov</code> and <code>just</code>.</li>
+<li><strong>A Justfile and a docs site</strong> with smalldocs, like the other profiles.</li>
+<li><strong>No <code>api</code> tool yet.</strong> It waits for the smalldocs release that reads rustdoc.</li>
+</ul>
+<p>Test the profile with a lab. The lab makes a temporary Cargo project and installs the profile with a local copy of the jnterfaces installer, in the way that <code>tests/test_install_stack.py</code> does it. jnterfaces has no entry for <code>rust</code> in <code>stack.json</code> yet. Do not edit jnterfaces. Write the entry that it needs in your report, and in a file <code>docs/jnterfaces-entry.md</code>.</p>
+<p><code>jlog</code> is being built now in ~/Projects/jlog. If it is not on <code>PATH</code>, test the recipes with the default shell, and say so in your report.</p>
+</section>
+<section id="github" class="level2">
+<h2 class="anchored" data-anchor-id="github">GitHub</h2>
+<p>You may create the public repo <code>rahuldave/jnprofile-rust</code> and push to <code>main</code>. Then make a GitHub issue in it, “Commit gates: the Rust profile”. Its acceptance list holds the profile criteria of the spec. Link it to rahuldave/agent_gest_git_skills#65. Put <code>Refs #&lt;issue&gt;</code> in each commit message.</p>
+</section>
+<section id="rules-of-this-user" class="level2">
+<h2 class="anchored" data-anchor-id="rules-of-this-user">Rules of this user</h2>
+<ul>
+<li><strong>Commit messages</strong> end with the line “Coded using Claude”. Add no Claude attribution lines.</li>
+<li><strong>Before each commit,</strong> have an adversarial reviewer try to break the change. Use a subagent on the strongest model. Fix what it finds, with a test for each finding.</li>
+<li><strong>Use <code>just</code> for every operation,</strong> and run the recipes yourself, not raw <code>cargo</code> or <code>uv</code>.</li>
+<li><strong>Write each doc</strong> (README, docs, skill) by ~/Projects/nossaifd/GUIDE.md, and check it with ~/Projects/nossaifd/check.py.</li>
+<li><strong>Some folders are off limits.</strong> Do not touch ~/.claude, the jj fork or the folder of any private project. Read ~/.codex only in read-only mode. Opening its SQLite files counts as a write, so do not open them.</li>
+<li><strong>Never print the values of environment variables.</strong> This machine has secrets in its environment.</li>
+<li><strong>If the spec is wrong or unclear</strong> for this profile, write the problem down in your report. Do not change <code>docs/spec.md</code> on your own.</li>
+<li><strong>End each report with four headings, in short lines.</strong> They are Done, Not done, Issues and For you.</li>
+</ul>
+</section>
+</main></div><footer class="footer"><div class="nav-footer"><div class="nav-footer-left">Part of <a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a> and its packages.</div><div class="nav-footer-center"></div><div class="nav-footer-right">Built with <a href="https://docs.smallish.dev/">smalldocs</a>.</div></div></footer></body></html>

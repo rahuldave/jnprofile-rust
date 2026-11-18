@@ -1,0 +1,259 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="generator" content="smalldocs-0.5.12"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><title>The tools – jnprofile-rust</title><link rel="icon" href="favicon.svg"><link rel="stylesheet" href="site_libs/themes/atelier/atelier.css" data-mode="light" class="quarto-color-scheme" id="quarto-bootstrap-light" media="not all and (prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/themes/atelier/atelier-dark.css" data-mode="dark" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap-dark" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="site_libs/smalldocs.css"><meta name="smalldocs:offset" content="./"><script src="site_libs/bootstrap/bootstrap.bundle.min.js"></script><script src="site_libs/fuse/fuse.min.js"></script><script src="site_libs/smalldocs.js" defer></script><script>(function(){var d=document.documentElement,s=null;try{s=localStorage.getItem('smalldocs-scheme')}catch(e){}var alt=s?s==='alternate':!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);var ls=document.querySelectorAll('link.quarto-color-scheme');if(alt)d.dataset.scheme='alternate';if(s)ls.forEach(function(l){var on=l.classList.contains('quarto-color-alternate')===alt;if(on)l.setAttribute('blocking','render');l.media=on?'all':'not all'});var on=ls[alt?1:0];if(on&&on.dataset.mode==='dark')d.classList.add('quarto-dark')})();</script></head><body class="nav-fixed"><header id="quarto-header" class="headroom sticky-top"><nav class="navbar navbar-expand-lg sd-navbar-default"><div class="navbar-container container-fluid"><div class="navbar-brand-container mx-auto"><a class="navbar-brand" href="index.html"><span class="navbar-title">jnprofile-rust</span></a></div><button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button><div class="collapse navbar-collapse" id="navbarCollapse"><ul class="navbar-nav navbar-nav-scroll me-auto"><li class="nav-item"><a class="nav-link" href="index.html"><span class="menu-text">Home</span></a></li><li class="nav-item"><a class="nav-link active" href="tools.html" aria-current="page"><span class="menu-text">Tools</span></a></li><li class="nav-item"><a class="nav-link" href="jnterfaces-entry.html"><span class="menu-text">The jnterfaces entry</span></a></li></ul><ul class="navbar-nav navbar-nav-scroll ms-auto"><li class="nav-item dropdown"><a class="nav-link dropdown-toggle" href="#" id="nav-menu-1" role="link" data-bs-toggle="dropdown" aria-expanded="false"><span class="menu-text">Projects</span></a><ul class="dropdown-menu" aria-labelledby="nav-menu-1"><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnterfaces/"><span class="menu-text">jnterfaces</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-python/"><span class="menu-text">jnprofile-python</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-typescript/"><span class="menu-text">jnprofile-typescript</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-rust/"><span class="menu-text">jnprofile-rust</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/agent_gest_git_skills/"><span class="menu-text">agent_gest_git_skills</span></a></li></ul></li><li class="nav-item compact"><a class="nav-link" href="https://github.com/rahuldave/jnprofile-rust" aria-label="github"><i class="bi bi-github" role="img"></i></a></li><li class="nav-item compact"><a class="quarto-color-scheme-toggle nav-link" href="" title="Toggle dark mode" onclick="window.smalldocsToggleScheme(); return false;"><i class="bi"></i></a></li></ul><div class="quarto-navbar-tools"><div class="smalldocs-search" id="quarto-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" class="form-control form-control-sm" placeholder="Search" aria-label="Search" autocomplete="off"><div class="smalldocs-search-results dropdown-menu"></div></div></div></div></div></nav></header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article has-margin"><div id="quarto-margin-sidebar" class="sidebar margin-sidebar"><nav id="TOC" role="doc-toc" class="toc-active"><h2 id="toc-title">On this page</h2><ul><li><a href="#the-base" id="toc-the-base" class="nav-link" data-scroll-target="#the-base">The base</a></li><li><a href="#toml" id="toc-toml" class="nav-link" data-scroll-target="#toml">toml</a></li><li><a href="#lint" id="toc-lint" class="nav-link" data-scroll-target="#lint">lint</a></li><li><a href="#typecheck" id="toc-typecheck" class="nav-link" data-scroll-target="#typecheck">typecheck</a></li><li><a href="#test" id="toc-test" class="nav-link" data-scroll-target="#test">test</a></li><li><a href="#the-run-id" id="toc-the-run-id" class="nav-link" data-scroll-target="#the-run-id">The run ID</a></li><li><a href="#integration" id="toc-integration" class="nav-link" data-scroll-target="#integration">integration</a></li><li><a href="#test-paths" id="toc-test-paths" class="nav-link" data-scroll-target="#test-paths">test-paths</a></li><li><a href="#docstring" id="toc-docstring" class="nav-link" data-scroll-target="#docstring">docstring</a></li><li><a href="#api" id="toc-api" class="nav-link" data-scroll-target="#api">api</a></li><li><a href="#lines-that-no-test-can-run" id="toc-lines-that-no-test-can-run" class="nav-link" data-scroll-target="#lines-that-no-test-can-run">Lines that no test can run</a></li><li><a href="#the-helper-script" id="toc-the-helper-script" class="nav-link" data-scroll-target="#the-helper-script">The helper script</a></li></ul></nav><div class="toc-actions"><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/blob/main/docs/tools.md" class="toc-action"><i class="bi bi-code"></i> View source</a></div><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/issues/new" class="toc-action"><i class="bi bi-chat-right"></i> Report an issue</a></div></div></div><main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block default"><div class="quarto-title"><h1 class="title">The tools</h1></div><div class="quarto-title-meta"></div></header><p>Each tool of the profile brings its recipes. No tool adds a crate to <code>Cargo.toml</code>. The tools use <code>cargo</code>, <code>uv</code>, and the programs that the key <code>programs</code> of <code>profile.json</code> names. The installer installs each of those with rustup or cargo.</p>
+<p>The recipes have no shebang line, so each line of a recipe runs through the shell of its module, <code>.agents/just/rust.just</code>. When that module sets <code>jlog</code> as its shell, the run log has each line. A <code>set shell</code> in the root Justfile does not reach the recipes of a module.</p>
+<p>The steps run cargo with <code>--locked</code>, so a step never makes or changes <code>Cargo.lock</code>. Run <code>just setup</code> to make the file or to bring it up to date, and commit it. The steps also run with <code>--all-features</code>, so the code behind each feature counts. Code behind a feature that cannot be on together with another feature, or code for another platform, such as <code>#[cfg(windows)]</code> on macOS, does not count.</p>
+<section id="the-base" class="level2">
+<h2 class="anchored" data-anchor-id="the-base">The base</h2>
+<p>Every project of the profile gets the base, even a project with no tool.</p>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just setup</code></td>
+<td>Downloads every dependency with <code>cargo fetch</code>, and makes or updates <code>Cargo.lock</code></td>
+</tr>
+<tr>
+<td><code>just build</code></td>
+<td>Builds every package of the workspace. Extra arguments go to cargo: <code>just build --release</code></td>
+</tr>
+<tr>
+<td><code>just version</code></td>
+<td>Prints the version of the project, <code>X.Y.Z</code>, from <code>[package]</code> or <code>[workspace.package]</code> of the root <code>Cargo.toml</code>, for the release tag. It prints nothing when there is none. It exits with 2 when the file cannot be read, or when the version is not semver. It is not a step of <code>just check</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The base adds <code>/target/</code> and <code>*.profraw</code> to <code>.gitignore</code>, and <code>/target/</code> to <code>.worktreedisposable</code>. The leading <code>/</code> keeps a module folder such as <code>src/target/</code> in git. That file lists the ignored files that a command can make again. Every report of a step goes to <code>target/</code>, so a step leaves no file that git sees.</p>
+</section>
+<section id="toml" class="level2">
+<h2 class="anchored" data-anchor-id="toml">toml</h2>
+<p><code>toml</code> is not a default tool. Install it with <code>just install toml</code>. It needs <code>taplo</code> and <code>cargo-sort</code>, and the installer installs both with <code>cargo +stable install --locked</code>.</p>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just toml-fmt</code></td>
+<td>Sorts the tables of each <code>Cargo.toml</code> of the workspace with <code>cargo sort --workspace --no-format</code>, then formats the TOML files with <code>taplo fmt</code></td>
+</tr>
+<tr>
+<td><code>just toml-check</code></td>
+<td>Checks both, and changes no file</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code>toml-check</code> is not a step of the commit gates. So <code>just verify</code> runs it, and <code>just check</code> and the commit gate do not. A CI job that wants it runs <code>just rust toml-check</code>.</p>
+<p><code>cargo-sort</code> reads its config <code>tomlfmt.toml</code> from the top of the project. When that file is missing and <code>.config/tomlfmt.toml</code> exists, the recipe passes that file with <code>--config</code>. taplo gets only the TOML files that git tracks or does not ignore, so it never reads <code>target/</code>. cargo-sort only sorts, because its format of arrays differs from that of taplo.</p>
+</section>
+<section id="lint" class="level2">
+<h2 class="anchored" data-anchor-id="lint">lint</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just fmt</code></td>
+<td>Formats the code of every package with <code>cargo fmt --all</code></td>
+</tr>
+<tr>
+<td><code>just fmt-check</code></td>
+<td>Checks the format with <code>cargo fmt --all --check</code>, and changes no file</td>
+</tr>
+<tr>
+<td><code>just lint</code></td>
+<td>Runs <code>cargo clippy --workspace --all-targets --all-features --locked -- -D warnings</code>. Extra arguments go to cargo: <code>just lint -p app</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="typecheck" class="level2">
+<h2 class="anchored" data-anchor-id="typecheck">typecheck</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just typecheck</code></td>
+<td>Checks the types of the code and the tests with <code>cargo check --workspace --all-targets --all-features --locked</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="test" class="level2">
+<h2 class="anchored" data-anchor-id="test">test</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just test</code></td>
+<td>Runs the unit tests, those of the libraries and the binaries, with <code>cargo llvm-cov test</code>. It writes the coverage to <code>target/llvm-cov/test.lcov</code>. Extra arguments go to cargo llvm-cov test, so <code>just test parse</code> runs the unit tests whose names hold <code>parse</code></td>
+</tr>
+<tr>
+<td><code>just coverage-check</code></td>
+<td>Fails on each changed line of code that no test runs. A line that <code>test</code> or <code>integration</code> runs passes. It runs each of them first, unless it wrote its report in the same run</td>
+</tr>
+<tr>
+<td><code>just test-paths [PATH...]</code></td>
+<td>Runs the tests of some files in the folder <code>tests</code>, with <code>cargo test</code> and without coverage</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code>cargo llvm-cov</code> writes the coverage as an LCOV file, a text format that lists how often each line ran. <code>diff-cover</code> is a Python program that compares such a file with the diff of git.</p>
+<p><code>coverage-check</code> runs <code>diff-cover</code> against <code>HEAD</code>, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes.</p>
+<p>The step merges the report of <code>test</code> and that of <code>integration</code> into one report, and gives it to <code>diff-cover</code>. A line that one of them runs passes. A line that one report measures and no report runs fails, also when the other report does not measure it, as for code under <code>#[cfg(not(test))]</code>. It reads each report only for the same run ID and the same worktree tree.</p>
+<p>On the first commit of a repository, <code>diff-cover</code> has no parent to compare with. Then the step checks each line of the merged report, and it names each line that no test runs.</p>
+<p>The report of <code>integration</code> counts only when <code>integration</code> is in the steps of <code>just check</code>. The installer of jnterfaces writes those steps into the key <code>steps</code> of <code>.agents/stack.json</code>. The setup answer that runs <code>integration</code> only in <code>just verify</code> takes it out of that list. Then a line that only an integration test runs fails <code>coverage-check</code>. Give it a unit test, or exclude its file. With no <code>.agents/stack.json</code>, the report counts, as the spec says by default.</p>
+<p><code>diff-cover</code> counts only the files that are in the report. <code>cargo llvm-cov</code> leaves out a file that no test target compiles, such as a file that no <code>mod</code> line names, or a file in <code>examples/</code>. It also leaves out each file in a folder named <code>tests</code>, <code>examples</code> or <code>benches</code>, at any depth, for example <code>src/tests/mod.rs</code>.</p>
+<p>So <code>coverage-check</code> also fails on each changed <code>.rs</code> file that is not in the report. The exceptions are the files in the folder <code>tests</code> or <code>benches</code> of a package, and the files of the two lists. On the first commit, the step checks only the files in the reports. The build script <code>build.rs</code> is in the report.</p>
+<p>LLVM counts the code of a <code>macro_rules!</code> macro at the line that calls the macro. So a branch of a macro that no test runs does not fail <code>coverage-check</code>, and the <code>test-review</code> target checks it.</p>
+</section>
+<section id="the-run-id" class="level2">
+<h2 class="anchored" data-anchor-id="the-run-id">The run ID</h2>
+<p>The root Justfile of a project has the line <code>export JLOG_RUN := env(&quot;JLOG_RUN&quot;, uuid())</code>. So each run of <code>just</code>, such as <code>just check</code>, has one run ID, and each inner call of <code>just</code> gets the same ID. A module must not have the line, because a second line would make a second ID.</p>
+<p>A full run of <code>just test</code>, with no arguments, takes the worktree tree before the tests run. The worktree tree is the tree hash of every file that git does not ignore, staged or not, without the folder <code>target</code>. When the tests pass and the tree has not changed, <code>test</code> saves <code>JLOG_RUN</code> and the tree in <code>target/llvm-cov/test.run.json</code>. A file that changed while the tests ran drops the run, because the report may come from the old code.</p>
+<p><code>coverage-check</code> reads a report only when both match the current run and the current tree. So in <code>just check</code>, which runs <code>test</code>, then <code>integration</code>, then <code>coverage-check</code>, the tests run once. Alone, <code>just coverage-check</code> runs the tests itself, and so does a run after <code>just test parse</code>. <code>integration</code> saves its run in the same way, in <code>target/llvm-cov/integration.run.json</code>.</p>
+</section>
+<section id="integration" class="level2">
+<h2 class="anchored" data-anchor-id="integration">integration</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just integration</code></td>
+<td>Runs the integration tests with <code>cargo llvm-cov test</code>: each test target, and each example or bench that sets <code>test = true</code>. It writes the coverage to <code>target/llvm-cov/integration.lcov</code>. Extra arguments go to cargo llvm-cov test, as for <code>test</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>An integration test is a test target, such as a file <code>tests/NAME.rs</code>, or a <code>[[test]]</code> of <code>Cargo.toml</code>. It uses the crate from outside, as a user does. A workspace with no test target runs no test, and its report is empty.</p>
+<p>Each step reads the targets from <code>cargo metadata</code>, and names each target whose key <code>test</code> is true, with <code>--bin</code>, <code>--test</code>, <code>--example</code> or <code>--bench</code>. So a <code>[[test]]</code> with <code>test = false</code>, such as a slow suite, does not run, as with a plain <code>cargo test</code>. A library has no such name, so <code>test</code> gives <code>--lib</code>. cargo looks for a name in each package. So when a library sets <code>test = false</code>, or two packages have a target of the same name and only one tests it, each package runs in a <code>cargo llvm-cov</code> of its own, and the step merges the reports.</p>
+<p>An extra argument that chooses targets or packages, such as <code>--test api</code> or <code>-p core</code>, takes the place of the choice of the step. The step adds <code>--workspace</code> only when the arguments choose no package. So <code>just integration --test slow</code> runs that suite, and <code>just test --test api</code> runs only <code>tests/api.rs</code>. An argument after <code>--</code> goes to the tests. The doctests, the tests in doc comments, run in neither step. <code>cargo llvm-cov test</code> leaves them out unless it gets <code>--doctests</code>, and that option needs nightly Rust.</p>
+</section>
+<section id="test-paths" class="level2">
+<h2 class="anchored" data-anchor-id="test-paths">test-paths</h2>
+<p><code>test-paths</code> takes the files that the <code>test-parent</code> recipe of the tasker role gives it. <code>test-parent</code> gives it only the changed files that match the key <code>tests</code> of <code>profile.json</code>, <code>tests/**</code>. When no file matches, as in a change with unit tests only, <code>test-parent</code> does not call <code>test-paths</code>. A unit test lives in the file of its code, such as <code>src/lib.rs</code>, and a copy of that file in the parent commit would bring the new code too.</p>
+<p>A file <code>tests/NAME.rs</code> runs as its test target. Any other file in the folder <code>tests</code>, such as <code>tests/common/mod.rs</code>, runs every test target of that folder. When called by hand with a file of code, <code>test-paths</code> skips the file and says so.</p>
+<p>The exit code of <code>test-paths</code> tells <code>test-parent</code> what happened. Each profile gives the same four codes:</p>
+<ul>
+<li><strong>0</strong> means the tests ran and passed.</li>
+<li><strong>1</strong> means a test failed or did not build. A new test of new code often does not build on the parent, and that is a failure of the test.</li>
+<li><strong>5</strong> means no test ran. The files may hold only code and no test file, the test targets may hold no test, or the folder <code>tests</code> may have no test target. A test with <code>#[ignore]</code> does not run, so it does not count. With no path, <code>test-paths</code> runs no test and exits with 5. pytest gives the same code when it collects no test.</li>
+<li><strong>2</strong> means the run itself failed. cargo may fail, for example on a stale <code>Cargo.lock</code> or on a path that it cannot run. Or a test may end the run, as with <code>std::process::exit</code> in a test, before its binary gives a result.</li>
+</ul>
+<p><code>test-paths</code> runs the tests of each package, and then gives one code. A failed test in any package gives 1, even when another package’s run ended early.</p>
+<p>A dependency whose build script fails for an outside reason, such as a missing system library, gives 1, not 2. cargo prints the same lines as for a test that does not build. The spec lists this as a limit of the Rust profile.</p>
+<p>cargo exits with 101 both when a test fails or does not build and when it fails itself. So <code>test-paths</code> reads the error lines of cargo to tell them apart.</p>
+<p><code>test-paths</code> reads the output of cargo to count the tests that ran. So it runs cargo with no colors and with neither quiet nor verbose output, whatever the settings of <code>CARGO_TERM_COLOR</code>, <code>CARGO_TERM_QUIET</code> and <code>CARGO_TERM_VERBOSE</code>. A target with <code>harness = false</code> prints no count, so its run counts as a test that ran.</p>
+<p><code>test-paths</code> reads the name of each test target from <code>cargo metadata</code>. So a <code>[[test]]</code> with a name other than its file still runs. A file in <code>tests</code> that is no test target, as with <code>autotests = false</code>, does not run, and <code>test-paths</code> says so.</p>
+<p>A test binary that names its tests and then stops with no result ends the run early. That happens on <code>std::process::exit(0)</code> or <code>std::process::exit(1)</code> in a test. <code>test-paths</code> then gives 2, as the spec says for every language, and not 1. A test that libtest names as failed before the stop still gives 1. A stop also ends the rest of the run of its package, so a test that would fail in a later binary of that package does not run.</p>
+<p>The key <code>tests</code> of <code>profile.json</code> names <code>tests/**</code>, the folder <code>tests</code> at the top of the project. A glob cannot name only the folder <code>tests</code> of each package of a workspace, because <code>**/tests/**</code> also takes a module such as <code>src/x/tests/mod.rs</code>, whose new code would reach the parent. So the tests of a member package are not copied to the parent, and <code>test-review</code> judges them from the diff.</p>
+</section>
+<section id="docstring" class="level2">
+<h2 class="anchored" data-anchor-id="docstring">docstring</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just docstring-check</code></td>
+<td>Fails on each item with no doc comment, public or private, and names its file and line</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The step runs <code>cargo clippy</code> with the lints <code>missing_docs</code> and <code>clippy::missing_docs_in_private_items</code>, with every feature. It checks the code of the libraries and the binaries, and not the tests. As the spec says, the step gives the two lints with <code>-W</code>, not <code>-D</code>, and reads the JSON messages of clippy. It has two reasons. An error in a library stops clippy from checking the binaries that use it, and a generated file must not fail the step.</p>
+<p>The step also passes <code>--cap-lints warn</code>. So a crate that sets <code>#![deny(missing_docs)]</code> still gets the list of items, and a generated file in such a crate still passes. An item in a file that git ignores, such as code that <code>build.rs</code> writes into <code>target/</code>, counts as generated. An <code>#[allow(missing_docs)]</code> in the code wins over the lints of the command line, so it hides its items from the step. The <code>review</code> target checks each new <code>#[allow]</code>. Each line of its output has the form <code>src/lib.rs:18:4: missing documentation for a function</code>.</p>
+</section>
+<section id="api" class="level2">
+<h2 class="anchored" data-anchor-id="api">api</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>just api-check</code></td>
+<td>Fails on each public item, parameter and return with no comment for the API pages, then runs <code>api-prose-check</code></td>
+</tr>
+<tr>
+<td><code>just api-prose-check [--base REF]</code></td>
+<td>Checks the API page of each changed file with the checker of nossaifd</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The recipes have the names and the form of the <code>api</code> tools of the Python and TypeScript profiles. The step <code>docs-check</code> of the docs role runs <code>api-check</code>, and so does <code>just verify</code>.</p>
+<p><code>api-check</code> runs <code>smalldocs api check</code> of smalldocs 0.5.12 with <code>uv</code>. smalldocs reads the API with <code>cargo +nightly-2026-11-12 rustdoc</code>, which writes the JSON format 61. smalldocs reads only the formats 57 and 61, so the profile pins the date. The program <code>nightly</code> of the tool installs that toolchain with <code>rustup toolchain install nightly-2026-11-12 --profile minimal</code>. Its check is <code>rustup run nightly-2026-11-12 rustc --version</code>, which never downloads a toolchain. <code>rustup toolchain list</code> and <code>rustup show active-toolchain</code> would install a missing pin of the project.</p>
+<p>The step fails on three things:</p>
+<ul>
+<li>A public item with no doc comment.</li>
+<li>A parameter with no comment after it on its line, and no line in an <code># Arguments</code> section.</li>
+<li>A return other than <code>()</code> with no <code># Returns</code> section.</li>
+</ul>
+<p>When <code>docs/_smalldocs.yml</code> has the key <code>api</code> with a section that says <code>language: rust</code>, the step checks only those sections. A section with no <code>toolchain</code> gets the pin. Otherwise the step checks each package of the workspace that has a library or a binary. A crate with only a binary gets the pages of its private items, as smalldocs does.</p>
+<p><code>api-prose-check</code> builds the API pages into a temporary folder, outside the project. It then runs the checker of nossaifd on the page of each changed API file and on the module comment of that file, the <code>//!</code> lines at its top. A changed file changed since <code>HEAD</code>. In CI, or with <code>--base REF</code>, it changed since the base that <code>check-changed</code> of nossaifd takes. Without the prose role, which installs the checker, the step passes. A run that passed is not run again in the same run of <code>just</code>, on the same tree and with the same base.</p>
+<p>The run files of <code>api-prose-check</code> go into <code>.jnprofile-rust/</code>, as those of the Python and TypeScript profiles go into <code>.jnprofile-python/</code> and <code>.jnprofile-typescript/</code>. The tool adds the folder to <code>.gitignore</code> and <code>.worktreedisposable</code>.</p>
+<p><code>.agents/just/rust/api_rule.py</code> holds the rule of the commit gate for the API files. Its function <code>is_api(path)</code> is true for a file that rustdoc reads for the pages. It is false in a project without the tool <code>api</code> or without the docs role, as <code>.agents/stack.json</code> records them. When the rule cannot read the api settings, such as a key <code>api</code> written on one line, it is true for each Rust file outside the folders of the tools and <code>.agents/generated.txt</code>. So the gate stays on, as with the rules of the Python and TypeScript profiles.</p>
+<p>With the key <code>api</code> in <code>docs/_smalldocs.yml</code>, the crates are those of its Rust sections. A <code>manifest</code> names a crate from <code>docs/</code>, and a section with no <code>manifest</code> takes the <code>Cargo.toml</code> of its root, as smalldocs does. Without the key, the crate of a file is the nearest folder above it with a <code>Cargo.toml</code>.</p>
+<p>In a crate with a library, the files are <code>src/lib.rs</code> and the modules under <code>src/</code>. In a crate with only a binary, they are <code>src/main.rs</code> and its modules. The binaries in <code>src/bin/</code>, the tests, the examples, <code>build.rs</code> and the files of <code>.agents/generated.txt</code> are not API files. The rule reads no TOML, so a library at another path, with <code>path</code> in <code>[lib]</code>, does not count. <code>api-prose-check</code> takes its changed files by the same rule, without the check of the tool and the role.</p>
+</section>
+<section id="lines-that-no-test-can-run" class="level2">
+<h2 class="anchored" data-anchor-id="lines-that-no-test-can-run">Lines that no test can run</h2>
+<p>Stable Rust has no pragma that leaves out one line from the coverage. So the profile reads two lists of files:</p>
+<ul>
+<li><strong><code>.agents/coverage-exclude.txt</code></strong> lists the files that <code>coverage-check</code> leaves out.</li>
+<li><strong><code>.agents/generated.txt</code></strong> lists the generated files. Both <code>coverage-check</code> and <code>docstring-check</code> leave them out.</li>
+</ul>
+<p>Each line of a list is a path or a glob, with the rules of git pathspecs. A <code>*</code> does not match a <code>/</code>, <code>**</code> matches any number of folders, and a path that ends with <code>/</code> names a folder. A line that starts with <code>#</code> is a comment. Write the reason for each entry in a comment above it.</p>
+<p>The steps read both lists from the parent commit, with <code>git show HEAD:./PATH</code>, which names the path from the top of the project. So a new entry counts only after it is in a commit of its own, and a commit cannot exempt its own code. With no parent, or when the parent has no such file, the list is empty. The <code>test-review</code> target judges each new entry.</p>
+</section>
+<section id="the-helper-script" class="level2">
+<h2 class="anchored" data-anchor-id="the-helper-script">The helper script</h2>
+<p>The recipes of <code>coverage-check</code>, <code>docstring-check</code>, <code>test-paths</code> and <code>api-check</code> run <code>.agents/just/rust/steps.py</code> with <code>uv</code>. The script needs Python 3.11 or later and no package. The api commands run it again under smalldocs, whose PyYAML reads <code>docs/_smalldocs.yml</code>. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in <code>target/jnprofile-rust/</code>. It also reads the JSON messages of clippy, and prints each item with no doc. <code>coverage-check</code> runs <code>diff-cover</code> 11.0.1 with <code>uv run --with</code>.</p>
+</section>
+</main></div><footer class="footer"><div class="nav-footer"><div class="nav-footer-left">Part of <a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a> and its packages.</div><div class="nav-footer-center"></div><div class="nav-footer-right">Built with <a href="https://docs.smallish.dev/">smalldocs</a>.</div></div></footer></body></html>

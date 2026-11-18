@@ -1,0 +1,135 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="generator" content="smalldocs-0.5.12"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><meta name="description" content="The Rust profile of jnterfaces: rustfmt, clippy, cargo check, cargo llvm-cov and diff-cover"><title>jnprofile-rust</title><link rel="icon" href="favicon.svg"><link rel="stylesheet" href="site_libs/themes/atelier/atelier.css" data-mode="light" class="quarto-color-scheme" id="quarto-bootstrap-light" media="not all and (prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/themes/atelier/atelier-dark.css" data-mode="dark" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap-dark" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="site_libs/smalldocs.css"><meta name="smalldocs:offset" content="./"><script src="site_libs/bootstrap/bootstrap.bundle.min.js"></script><script src="site_libs/fuse/fuse.min.js"></script><script src="site_libs/smalldocs.js" defer></script><script>(function(){var d=document.documentElement,s=null;try{s=localStorage.getItem('smalldocs-scheme')}catch(e){}var alt=s?s==='alternate':!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);var ls=document.querySelectorAll('link.quarto-color-scheme');if(alt)d.dataset.scheme='alternate';if(s)ls.forEach(function(l){var on=l.classList.contains('quarto-color-alternate')===alt;if(on)l.setAttribute('blocking','render');l.media=on?'all':'not all'});var on=ls[alt?1:0];if(on&&on.dataset.mode==='dark')d.classList.add('quarto-dark')})();</script></head><body class="nav-fixed"><header id="quarto-header" class="headroom sticky-top"><nav class="navbar navbar-expand-lg sd-navbar-default"><div class="navbar-container container-fluid"><div class="navbar-brand-container mx-auto"><a class="navbar-brand" href="index.html"><span class="navbar-title">jnprofile-rust</span></a></div><button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button><div class="collapse navbar-collapse" id="navbarCollapse"><ul class="navbar-nav navbar-nav-scroll me-auto"><li class="nav-item"><a class="nav-link active" href="index.html" aria-current="page"><span class="menu-text">Home</span></a></li><li class="nav-item"><a class="nav-link" href="tools.html"><span class="menu-text">Tools</span></a></li><li class="nav-item"><a class="nav-link" href="jnterfaces-entry.html"><span class="menu-text">The jnterfaces entry</span></a></li></ul><ul class="navbar-nav navbar-nav-scroll ms-auto"><li class="nav-item dropdown"><a class="nav-link dropdown-toggle" href="#" id="nav-menu-1" role="link" data-bs-toggle="dropdown" aria-expanded="false"><span class="menu-text">Projects</span></a><ul class="dropdown-menu" aria-labelledby="nav-menu-1"><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnterfaces/"><span class="menu-text">jnterfaces</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-python/"><span class="menu-text">jnprofile-python</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-typescript/"><span class="menu-text">jnprofile-typescript</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-rust/"><span class="menu-text">jnprofile-rust</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/agent_gest_git_skills/"><span class="menu-text">agent_gest_git_skills</span></a></li></ul></li><li class="nav-item compact"><a class="nav-link" href="https://github.com/rahuldave/jnprofile-rust" aria-label="github"><i class="bi bi-github" role="img"></i></a></li><li class="nav-item compact"><a class="quarto-color-scheme-toggle nav-link" href="" title="Toggle dark mode" onclick="window.smalldocsToggleScheme(); return false;"><i class="bi"></i></a></li></ul><div class="quarto-navbar-tools"><div class="smalldocs-search" id="quarto-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" class="form-control form-control-sm" placeholder="Search" aria-label="Search" autocomplete="off"><div class="smalldocs-search-results dropdown-menu"></div></div></div></div></div></nav></header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article has-margin"><div id="quarto-margin-sidebar" class="sidebar margin-sidebar"><nav id="TOC" role="doc-toc" class="toc-active"><h2 id="toc-title">On this page</h2><ul><li><a href="#install" id="toc-install" class="nav-link" data-scroll-target="#install">Install</a></li><li><a href="#the-steps" id="toc-the-steps" class="nav-link" data-scroll-target="#the-steps">The steps</a></li><li><a href="#the-other-sites" id="toc-the-other-sites" class="nav-link" data-scroll-target="#the-other-sites">The other sites</a></li></ul></nav><div class="toc-actions"><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/blob/main/docs/index.md" class="toc-action"><i class="bi bi-code"></i> View source</a></div><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/issues/new" class="toc-action"><i class="bi bi-chat-right"></i> Report an issue</a></div></div></div><main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block default"><div class="quarto-title"><h1 class="title">jnprofile-rust</h1></div><div class="quarto-title-meta"></div></header><p>jnprofile-rust is the Rust profile of <a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a>. A profile sets up a project in one language. It has tools, for example <code>lint</code>, and each tool brings its recipes. A recipe is a command of the project’s Justfile, such as <code>just lint</code>.</p>
+<p>The profile is for a Rust project with Cargo. The installer finds such a project by its <code>Cargo.toml</code>. The profile gives the project the real steps of the commit gates. A step is one recipe that <code>just check</code> runs, and it fails when the change breaks a rule.</p>
+<section id="install" class="level2">
+<h2 class="anchored" data-anchor-id="install">Install</h2>
+<p>jnterfaces has the rust profile since jnterfaces#34, and installs its programs since jnterfaces#39. <a href="jnterfaces-entry.html">The jnterfaces entry</a> keeps the entry and the change to the installer that it took. Run this command in a project that has the jnterfaces installer:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash">just install --profile rust</code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>In a folder with no <code>Cargo.toml</code>, the command first runs <code>cargo init --vcs none</code>. It then installs the six tools <code>lint</code>, <code>typecheck</code>, <code>test</code>, <code>integration</code>, <code>docstring</code> and <code>api</code>. If you do not choose other roles, it also turns on the default roles of the profile, <code>tasker</code> and <code>prose</code>. The section <a href="https://rahuldave.github.io/jnterfaces/#roles">The roles</a> of the jnterfaces guide says what each role installs.</p>
+<p>The machine needs Rust from rustup, and the programs that jnterfaces needs. The profile installs the rest with rustup and cargo. The key <code>programs</code> of <code>profile.json</code> names each program, how the installer checks it, and how it installs it.</p>
+<p>The installer checks the programs of each tool that it installs, in the project folder. It runs <code>cargo +stable install</code> in the home folder, so the stable toolchain builds the programs, whatever the project pins, and also when rustup has no default toolchain. The profile installs stable with the minimal profile when it is missing. The checks run in the project folder, so rustup reads the <code>rust-toolchain.toml</code> of the project, and a component goes to the toolchain that the project pins.</p>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Program</th>
+<th>Use</th>
+<th>Install</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rustup</code> 1.28.0 or later</td>
+<td>Every step</td>
+<td>https://rustup.rs/. The installer stops if it is missing or older. An older rustup installs a missing pinned toolchain during a check</td>
+</tr>
+<tr>
+<td>The toolchain, with <code>cargo</code></td>
+<td>Every step</td>
+<td>The profile runs <code>rustup toolchain install</code> when the toolchain that <code>rust-toolchain.toml</code> or <code>rust-toolchain</code> pins is missing. With no pin and no default toolchain, run <code>rustup default stable</code> yourself</td>
+</tr>
+<tr>
+<td><code>rustfmt</code> and <code>clippy</code></td>
+<td><code>fmt</code>, <code>fmt-check</code>, <code>lint</code> and <code>docstring-check</code></td>
+<td>The profile runs <code>rustup component add</code></td>
+</tr>
+<tr>
+<td><code>llvm-tools-preview</code> and <code>cargo-llvm-cov</code></td>
+<td>The coverage of <code>test</code>, <code>integration</code> and <code>coverage-check</code></td>
+<td>The profile runs <code>rustup component add llvm-tools-preview</code> and <code>cargo +stable install --locked cargo-llvm-cov@0.9.1</code>. Version 0.9.1 or later passes the check</td>
+</tr>
+<tr>
+<td>The nightly toolchain <code>nightly-2026-11-12</code></td>
+<td><code>api-check</code>, through smalldocs and rustdoc</td>
+<td>The profile runs <code>rustup toolchain install nightly-2026-11-12 --profile minimal</code> in the home folder. It does not change the default toolchain</td>
+</tr>
+<tr>
+<td><code>taplo</code> and <code>cargo-sort</code></td>
+<td>The tool <code>toml</code>, if you install it</td>
+<td>The profile runs <code>cargo +stable install --locked taplo-cli@0.10.0</code> and <code>cargo +stable install --locked cargo-sort@2.1.4</code>. These versions or later pass the check</td>
+</tr>
+<tr>
+<td><code>just</code></td>
+<td>Every recipe</td>
+<td><code>cargo install just</code></td>
+</tr>
+<tr>
+<td><code>uv</code></td>
+<td><code>diff-cover</code> and the helper script of the steps</td>
+<td>https://docs.astral.sh/uv/</td>
+</tr>
+<tr>
+<td><code>jlog</code> v0.2.0</td>
+<td><code>just install</code> of jnterfaces, which runs each step through it</td>
+<td>Clone https://github.com/rahuldave/jlog, run <code>git checkout v0.2.0</code>, then <code>just install</code> there</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="the-steps" class="level2">
+<h2 class="anchored" data-anchor-id="the-steps">The steps</h2>
+<div class="sd-table">
+<table class="caption-top table">
+<thead>
+<tr>
+<th>Step</th>
+<th>Tool</th>
+<th>What fails it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fmt-check</code></td>
+<td><code>lint</code></td>
+<td>Code that rustfmt formats in another way</td>
+</tr>
+<tr>
+<td><code>lint</code></td>
+<td><code>lint</code></td>
+<td>Each warning of clippy</td>
+</tr>
+<tr>
+<td><code>typecheck</code></td>
+<td><code>typecheck</code></td>
+<td>A type error in the code or in the tests</td>
+</tr>
+<tr>
+<td><code>test</code></td>
+<td><code>test</code></td>
+<td>A unit test that fails, in the library or a binary</td>
+</tr>
+<tr>
+<td><code>integration</code></td>
+<td><code>integration</code></td>
+<td>A test that fails in a test target, such as a file in <code>tests/</code></td>
+</tr>
+<tr>
+<td><code>coverage-check</code></td>
+<td><code>test</code></td>
+<td>A changed line of code that neither <code>test</code> nor <code>integration</code> runs</td>
+</tr>
+<tr>
+<td><code>docstring-check</code></td>
+<td><code>docstring</code></td>
+<td>An item with no doc comment, public or private</td>
+</tr>
+<tr>
+<td><code>api-check</code></td>
+<td><code>api</code></td>
+<td>A public item, a parameter or a return with no comment for the API pages, or a hard problem of prose in a changed page</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><a href="tools.html">The tools</a> gives each recipe, and the rules for the lines that no test can run.</p>
+</section>
+<section id="the-other-sites" class="level2">
+<h2 class="anchored" data-anchor-id="the-other-sites">The other sites</h2>
+<ul>
+<li><a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a>: the installer, and the <code>just</code>, <code>jagt-protocol</code> and <code>cx</code> skills.</li>
+<li><a href="https://rahuldave.github.io/jnprofile-python/">jnprofile-python</a>: the Python profile.</li>
+<li><a href="https://rahuldave.github.io/jnprofile-typescript/">jnprofile-typescript</a>: the TypeScript profile.</li>
+<li><a href="https://rahuldave.github.io/agent_gest_git_skills/">agent_gest_git_skills</a>: the tasker role and its g skills, the skills whose names start with g.</li>
+</ul>
+</section>
+</main></div><footer class="footer"><div class="nav-footer"><div class="nav-footer-left">Part of <a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a> and its packages.</div><div class="nav-footer-center"></div><div class="nav-footer-right">Built with <a href="https://docs.smallish.dev/">smalldocs</a>.</div></div></footer></body></html>

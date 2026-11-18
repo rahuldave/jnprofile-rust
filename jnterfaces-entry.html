@@ -1,0 +1,112 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="generator" content="smalldocs-0.5.12"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><title>The jnterfaces entry – jnprofile-rust</title><link rel="icon" href="favicon.svg"><link rel="stylesheet" href="site_libs/themes/atelier/atelier.css" data-mode="light" class="quarto-color-scheme" id="quarto-bootstrap-light" media="not all and (prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/themes/atelier/atelier-dark.css" data-mode="dark" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap-dark" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="site_libs/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="site_libs/smalldocs.css"><meta name="smalldocs:offset" content="./"><script src="site_libs/bootstrap/bootstrap.bundle.min.js"></script><script src="site_libs/fuse/fuse.min.js"></script><script src="site_libs/smalldocs.js" defer></script><script>(function(){var d=document.documentElement,s=null;try{s=localStorage.getItem('smalldocs-scheme')}catch(e){}var alt=s?s==='alternate':!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);var ls=document.querySelectorAll('link.quarto-color-scheme');if(alt)d.dataset.scheme='alternate';if(s)ls.forEach(function(l){var on=l.classList.contains('quarto-color-alternate')===alt;if(on)l.setAttribute('blocking','render');l.media=on?'all':'not all'});var on=ls[alt?1:0];if(on&&on.dataset.mode==='dark')d.classList.add('quarto-dark')})();</script></head><body class="nav-fixed"><header id="quarto-header" class="headroom sticky-top"><nav class="navbar navbar-expand-lg sd-navbar-default"><div class="navbar-container container-fluid"><div class="navbar-brand-container mx-auto"><a class="navbar-brand" href="index.html"><span class="navbar-title">jnprofile-rust</span></a></div><button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button><div class="collapse navbar-collapse" id="navbarCollapse"><ul class="navbar-nav navbar-nav-scroll me-auto"><li class="nav-item"><a class="nav-link" href="index.html"><span class="menu-text">Home</span></a></li><li class="nav-item"><a class="nav-link" href="tools.html"><span class="menu-text">Tools</span></a></li><li class="nav-item"><a class="nav-link active" href="jnterfaces-entry.html" aria-current="page"><span class="menu-text">The jnterfaces entry</span></a></li></ul><ul class="navbar-nav navbar-nav-scroll ms-auto"><li class="nav-item dropdown"><a class="nav-link dropdown-toggle" href="#" id="nav-menu-1" role="link" data-bs-toggle="dropdown" aria-expanded="false"><span class="menu-text">Projects</span></a><ul class="dropdown-menu" aria-labelledby="nav-menu-1"><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnterfaces/"><span class="menu-text">jnterfaces</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-python/"><span class="menu-text">jnprofile-python</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-typescript/"><span class="menu-text">jnprofile-typescript</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/jnprofile-rust/"><span class="menu-text">jnprofile-rust</span></a></li><li class=""><a class="dropdown-item" href="https://rahuldave.github.io/agent_gest_git_skills/"><span class="menu-text">agent_gest_git_skills</span></a></li></ul></li><li class="nav-item compact"><a class="nav-link" href="https://github.com/rahuldave/jnprofile-rust" aria-label="github"><i class="bi bi-github" role="img"></i></a></li><li class="nav-item compact"><a class="quarto-color-scheme-toggle nav-link" href="" title="Toggle dark mode" onclick="window.smalldocsToggleScheme(); return false;"><i class="bi"></i></a></li></ul><div class="quarto-navbar-tools"><div class="smalldocs-search" id="quarto-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" class="form-control form-control-sm" placeholder="Search" aria-label="Search" autocomplete="off"><div class="smalldocs-search-results dropdown-menu"></div></div></div></div></div></nav></header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article has-margin"><div id="quarto-margin-sidebar" class="sidebar margin-sidebar"><nav id="TOC" role="doc-toc" class="toc-active"><h2 id="toc-title">On this page</h2><ul><li><a href="#the-entry-in-stack.json" id="toc-the-entry-in-stack.json" class="nav-link" data-scroll-target="#the-entry-in-stack.json">The entry in stack.json</a></li><li><a href="#the-change-to-the-installer" id="toc-the-change-to-the-installer" class="nav-link" data-scroll-target="#the-change-to-the-installer">The change to the installer</a></li><li><a href="#what-jnterfaces-reads-from-the-profile" id="toc-what-jnterfaces-reads-from-the-profile" class="nav-link" data-scroll-target="#what-jnterfaces-reads-from-the-profile">What jnterfaces reads from the profile</a></li><li><a href="#what-the-profile-needs-from-jnterfaces" id="toc-what-the-profile-needs-from-jnterfaces" class="nav-link" data-scroll-target="#what-the-profile-needs-from-jnterfaces">What the profile needs from jnterfaces</a></li></ul></nav><div class="toc-actions"><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/blob/main/docs/jnterfaces-entry.md" class="toc-action"><i class="bi bi-code"></i> View source</a></div><div class="action-links"><a href="https://github.com/rahuldave/jnprofile-rust/issues/new" class="toc-action"><i class="bi bi-chat-right"></i> Report an issue</a></div></div></div><main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block default"><div class="quarto-title"><h1 class="title">The jnterfaces entry</h1></div><div class="quarto-title-meta"></div></header><p>jnterfaces#34 took the entry for the rust profile and the change to its installer. This page keeps both as a record. The change was made against jnterfaces at commit <code>2cfb176</code>. jnterfaces#39 then taught the installer the key <code>programs</code>. The lab of this repository copies jnterfaces at commit <code>8d8885f</code>, and installs the profile with that copy. That commit has both, pins jlog v0.2.0, runs <code>integration</code> before <code>coverage-check</code>, and pins smalldocs 0.5.12.</p>
+<section id="the-entry-in-stack.json" class="level2">
+<h2 class="anchored" data-anchor-id="the-entry-in-stack.json">The entry in stack.json</h2>
+<p>jnterfaces#34 added this entry to the key <code>profiles</code> of <code>stack.json</code>, next to <code>python</code> and <code>typescript</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode json code-with-copy"><code class="sourceCode json">{
+  <span class="kw">&quot;rust&quot;</span>: {
+    <span class="kw">&quot;package&quot;</span>: <span class="st">&quot;jnprofile-rust&quot;</span>,
+    <span class="kw">&quot;repository&quot;</span>: <span class="st">&quot;https://github.com/rahuldave/jnprofile-rust&quot;</span>,
+    <span class="kw">&quot;about&quot;</span>: <span class="st">&quot;a Rust project with Cargo&quot;</span>,
+    <span class="kw">&quot;detect&quot;</span>: [
+      <span class="st">&quot;Cargo.toml&quot;</span>
+    ]
+  }
+}</code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="the-change-to-the-installer" class="level2">
+<h2 class="anchored" data-anchor-id="the-change-to-the-installer">The change to the installer</h2>
+<p>Before jnterfaces#34, the installer of jnterfaces stopped with “The profile.json of the rust profile is malformed” for two reasons:</p>
+<ul>
+<li><strong>The manifest.</strong> <code>check_profile</code> accepts only <code>pyproject.toml</code> and <code>package.json</code> as the key <code>manifest</code>. The rust profile names <code>Cargo.toml</code>.</li>
+<li><strong>A tool with no packages.</strong> <code>check_profile</code> needs at least one package for each tool. The tools of the rust profile are programs of the machine, so each tool has the empty list <code>[]</code>.</li>
+</ul>
+<p>A third change follows from the first. <code>present_packages</code> reads the packages that the project file already has. It reads <code>Cargo.toml</code> as JSON, fails, and then the installer says “cannot read Cargo.toml”. The change reads the table <code>[dev-dependencies]</code>, where <code>cargo add --dev</code> puts a crate. A tool with no packages also skips that read, so a <code>Cargo.toml</code> that does not parse does not stop the install, and the installer says “lint for rust needs no packages”. The diff of the installer was:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode diff code-with-copy"><code class="sourceCode diff"><span class="gd">--- a/scripts/install_stack.py</span>
+<span class="gi">+++ b/scripts/install_stack.py</span>
+<span class="gu">@@ -169,7 +169,7 @@</span>
+           and string_list(profile.get(&#x27;remove&#x27;)) and isinstance(tools, dict) and tools
+           and string_list(profile.get(&#x27;default_tools&#x27;, [])) and set(profile.get(&#x27;default_tools&#x27;, [])) &lt;= set(tools)
+           and isinstance(profile.get(&#x27;choices&#x27;, {}), dict) and set(profile.get(&#x27;choices&#x27;, {})) &lt;= set(choices)
+<span class="gd">-          and profile.get(&#x27;manifest&#x27;) in (&#x27;pyproject.toml&#x27;, &#x27;package.json&#x27;)</span>
+<span class="gi">+          and profile.get(&#x27;manifest&#x27;) in (&#x27;pyproject.toml&#x27;, &#x27;package.json&#x27;, &#x27;Cargo.toml&#x27;)</span>
+           and isinstance(init, dict)
+           and (not init or (plain_path(init.get(&#x27;file&#x27;)) and string_list(init.get(&#x27;command&#x27;)) and init[&#x27;command&#x27;]))
+           and (profile.get(&#x27;uv_default_groups&#x27;) is None or isinstance(profile[&#x27;uv_default_groups&#x27;], str)
+<span class="gu">@@ -180,7 +180,7 @@</span>
+           and all(plain_path(k) and plain_path(v) for k, v in base.get(&#x27;files&#x27;, {}).items())
+           and lines_ok(base)
+           and all(re.fullmatch(r&#x27;[a-z][a-z0-9_-]*&#x27;, tool_name) for tool_name in tools)
+<span class="gd">-          and all(isinstance(tool, dict) and string_list(tool.get(&#x27;packages&#x27;)) and tool[&#x27;packages&#x27;]</span>
+<span class="gi">+          and all(isinstance(tool, dict) and string_list(tool.get(&#x27;packages&#x27;))</span>
+                   and isinstance(tool.get(&#x27;files&#x27;, {}), dict)
+                   and all(plain_path(k) and plain_path(v) for k, v in tool.get(&#x27;files&#x27;, {}).items())
+                   and lines_ok(tool) and parts_ok(tool)
+<span class="gu">@@ -901,6 +901,10 @@</span>
+             groups = tomllib.loads(path.read_text()).get(&#x27;dependency-groups&#x27;, {})
+             entries = groups.get(group, []) if isinstance(groups, dict) else []
+             return {normal_name(item, profile) for item in entries if isinstance(item, str)}
+<span class="gi">+        if manifest == &#x27;Cargo.toml&#x27;:</span>
+<span class="gi">+            # cargo add --dev puts a crate in [dev-dependencies]. A tool of the rust profile may have no crate.</span>
+<span class="gi">+            table = tomllib.loads(path.read_text()).get(&#x27;dev-dependencies&#x27;, {})</span>
+<span class="gi">+            return set(table) if isinstance(table, dict) else None</span>
+         data = json.loads(path.read_text())
+         lists = {kind: set(data[kind]) if isinstance(data.get(kind), dict) else set()
+                  for kind in (&#x27;dependencies&#x27;, &#x27;devDependencies&#x27;, &#x27;optionalDependencies&#x27;, &#x27;peerDependencies&#x27;)}
+<span class="gu">@@ -943,6 +947,11 @@</span>
+             if tool in profile[&#x27;tools&#x27;]:
+                 entry = profile[&#x27;tools&#x27;][tool]
+                 group = entry.get(&#x27;group&#x27;, tool)
+<span class="gi">+                if not entry[&#x27;packages&#x27;]:</span>
+<span class="gi">+                    # A tool with no packages, as each tool of the rust profile, needs no read of the project file.</span>
+<span class="gi">+                    steps.append((&#x27;add&#x27;, name, tool, None, entry.get(&#x27;files&#x27;, {}), entry,</span>
+<span class="gi">+                                  (owner_key(name, profile, tool), []), None))</span>
+<span class="gi">+                    continue</span>
+                 present = present_packages(target, profile, group)
+                 if present is None:
+                     steps.append((&#x27;add&#x27;, name, tool, None, {}, entry, (owner_key(name, profile, tool), []),
+<span class="gu">@@ -1522,7 +1531,8 @@</span>
+                 continue
+             for first in entry.get(&#x27;before&#x27;, []):
+                 print(&#x27;Would run: &#x27; + &#x27; &#x27;.join(first))
+<span class="gd">-            print(&#x27;Would run: &#x27; + &#x27; &#x27;.join(command) if command else f&#x27;The project already has the packages of {tool}&#x27;)</span>
+<span class="gi">+            print(&#x27;Would run: &#x27; + &#x27; &#x27;.join(command) if command else f&#x27;The project already has the packages of {tool}&#x27;</span>
+<span class="gi">+                  if entry.get(&#x27;packages&#x27;) else f&#x27;{tool} needs no packages&#x27;)</span>
+         after = {}
+         sync_files(target, profiles, [n for n in active if n not in leaving], tools, active, True, parts, roles,
+                    gone_roles, unsure, migrating, after=after)
+<span class="gu">@@ -1645,7 +1655,8 @@</span>
+                           file=sys.stderr)
+                     failed = subprocess.run(command, cwd=target, env=project_env()).returncode
+                 else:
+<span class="gd">-                    print(f&#x27;The project already has the packages of {tool} for {profile}&#x27;, file=sys.stderr)</span>
+<span class="gi">+                    print(f&#x27;The project already has the packages of {tool} for {profile}&#x27; if entry.get(&#x27;packages&#x27;)</span>
+<span class="gi">+                          else f&#x27;{tool} for {profile} needs no packages&#x27;, file=sys.stderr)</span>
+         except (OSError, StackError) as exc:
+             failed = str(exc)
+         except BaseException:</code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>jnterfaces#34 also gave the tests of jnterfaces a profile <code>rust</code> in <code>PROFILES</code> and in <code>RECORDS_PROFILE</code> of <code>tests/test_install_stack.py</code>, with a <code>Cargo.toml</code> case for <code>present_packages</code>.</p>
+</section>
+<section id="what-jnterfaces-reads-from-the-profile" class="level2">
+<h2 class="anchored" data-anchor-id="what-jnterfaces-reads-from-the-profile">What jnterfaces reads from the profile</h2>
+<ul>
+<li><strong>The key <code>code</code></strong> of <code>profile.json</code> holds the <code>@code</code> globs, here <code>**/*.rs</code>. The gate reads them for the required targets. The user approved the name <code>code</code>. The spec has the installer copy the globs into the key <code>code</code> of <code>.agents/stack.json</code>, for each profile. jnterfaces#34 added that to the installer. The Python and TypeScript profiles need the same key.</li>
+<li><strong>The key <code>programs</code></strong> of <code>profile.json</code> lists each program that the profile needs, with the command that checks it and, for most, the command that installs it. A tool names its programs under <code>programs</code>, and so does the base. The installer of jnterfaces reads the key since jnterfaces#39. The commands are split with <code>shlex.split</code> and run with no shell. A program with no install command, here only <code>rustup</code>, is checked before the installer writes anything, and stops it with its description. The others are checked in the project folder after the files are written, installed when the check fails, and checked again. A program can have a version floor in <code>version</code>, such as <code>&gt;=0.10.0</code>, which the installer reads since jnterfaces#57. The check passes when the first version in its output is the floor or later. The profile gives a floor to <code>rustup</code>, <code>cargo-llvm-cov</code>, <code>taplo</code>, <code>cargo-sort</code> and the nightly. A <code>cargo +stable install</code> line installs the floor itself. A newer version passes too, so the profile pins no minor line. An install runs in the folder that <code>install_in</code> names, <code>project</code> by default or <code>home</code>. The <code>cargo +stable install</code> lines run in <code>home</code>, after the program <code>stable</code> makes sure that rustup has the stable toolchain. So they build with stable, whatever the project pins, and also when rustup has no default toolchain.</li>
+</ul>
+<p>The program after <code>rustup</code> is <code>toolchain</code>. Its check is <code>rustup show active-toolchain</code>. When the <code>rust-toolchain.toml</code> or <code>rust-toolchain</code> file of the project pins a toolchain that rustup does not have, rustup 1.29.3 would install it during the check. The installer runs each check with <code>RUSTUP_AUTO_INSTALL=0</code> since jnterfaces#57, so the check fails, and then <code>rustup toolchain install</code> installs the pinned toolchain. A rustup older than 1.28.0 installs the toolchain during <code>rustup --version</code> whatever the variable says, so the floor of <code>rustup</code> is <code>&gt;=1.28.0</code>. <code>cargo</code> is not a program of its own, because <code>cargo --version</code> fails in that case too.</p>
+<p>A machine where rustup has no default toolchain, as after <code>rustup-init --default-toolchain none</code>, fails the check in a project with no pin. <code>rustup toolchain install</code> with no name fails there too. So in a project that has a <code>Cargo.toml</code>, the installer stops and prints the description of <code>toolchain</code>, which says to run <code>rustup default stable</code> or to pin a toolchain. In a folder with no <code>Cargo.toml</code>, <code>cargo init</code> fails first, before the installer checks the programs, and rustup prints its own hint. The profile does not run <code>rustup default stable</code> itself, because that would change the default of rustup on each machine that has none, also for a project that pins its toolchain.</p>
+<ul>
+<li><strong>The key <code>tests</code></strong> of <code>profile.json</code> holds the globs of the test files, here <code>tests/**</code>, the folder <code>tests</code> at the top of the project. A wider glob such as <code>**/tests/**</code> would also take a module in <code>src/</code> and bring its new code into the parent. The installer copies the globs into the key <code>tests</code> of <code>.agents/stack.json</code>, for each profile; jnterfaces#46 added that. <code>test-parent</code> of agent_gest_git_skills reads that key, and copies only those files into the worktree of the parent.</li>
+<li><strong>The step names</strong> are the recipe names. The profile gives <code>fmt-check</code>, <code>lint</code>, <code>typecheck</code>, <code>test</code>, <code>integration</code>, <code>coverage-check</code> and <code>docstring-check</code>, and also <code>test-paths</code> for the <code>test-parent</code> recipe.</li>
+<li><strong>The key <code>verify</code></strong> of each tool lists the steps of the tool, so <code>just rust verify</code> runs all seven steps today.</li>
+<li><strong>The folder <code>.agents/targets/rust/</code></strong> is an extra of <code>skill-package.json</code>, so the installer copies it as it copies <code>.agents/just/rust/</code>.</li>
+</ul>
+</section>
+<section id="what-the-profile-needs-from-jnterfaces" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-profile-needs-from-jnterfaces">What the profile needs from jnterfaces</h2>
+<ul>
+<li><strong>The module sets <code>working-directory</code>.</strong> The installer writes <code>set working-directory := &#x27;../..&#x27;</code> into each module, so that the recipes run at the top of the project. The spec allows that setting in a module, and it forbids only a <code>[working-directory]</code> attribute on a recipe. The recipes of this profile need the setting.</li>
+<li><strong>A module does not take the shell of the root Justfile.</strong> With just 1.50, a <code>set shell</code> in the root Justfile reaches the recipes of the root and of its imports, but not the recipes of a <code>mod</code>. The recipes of the profile are in the module <code>rust.just</code>, so the installer writes <code>set shell</code> into that file, as the spec says. The lab checks that the line is there, and runs the recipes with a stand-in <code>jlog</code>.</li>
+<li><strong>The run ID.</strong> The index runs <code>just --justfile ... rust test</code> and <code>just --justfile ... rust coverage-check</code> as two calls of <code>just</code>, so a dependency of <code>coverage-check</code> on <code>test</code> would run the tests twice. The spec now gives each run of <code>just</code> one run ID. The root Justfile has the line <code>export JLOG_RUN := env(&quot;JLOG_RUN&quot;, uuid())</code>, and no module may have it. <code>test</code> saves the run ID and the worktree tree next to its report, and <code>coverage-check</code> reads the report only when both match. Otherwise it runs the tests itself. The installer writes the line into the root Justfile, and the lab checks it. Without the line, <code>coverage-check</code> runs the tests each time, and <code>just rust verify</code> runs them twice.</li>
+</ul>
+</section>
+</main></div><footer class="footer"><div class="nav-footer"><div class="nav-footer-left">Part of <a href="https://rahuldave.github.io/jnterfaces/">jnterfaces</a> and its packages.</div><div class="nav-footer-center"></div><div class="nav-footer-right">Built with <a href="https://docs.smallish.dev/">smalldocs</a>.</div></div></footer></body></html>
