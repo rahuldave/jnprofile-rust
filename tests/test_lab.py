@@ -2,8 +2,8 @@
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
 SKILL_PACKAGES_DIR/jnterfaces, else in ../jnterfaces next to this repository. BASE has the rust entry of jnterfaces#34,
-the programs of jnterfaces#39, the order of #52, and the version floors of #57 with jlog v0.2.0. The fixed commit keeps
-the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
+the programs of jnterfaces#39, the order of #52, and the version floors of #57 and jlog v0.3.0 of #62. The fixed commit
+keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
 tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that
 it installs. It skips when a check of such a program fails, so that the installer of the lab never installs a program on
@@ -30,10 +30,10 @@ JNTERFACES = Path(os.environ.get('JNTERFACES')
                   or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else REPO.parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#57. It installs the programs of a profile (#39), runs integration before coverage-check
-# (#52), runs integration once in just verify (#54), pins smalldocs 0.5.12 (#55), and reads the version floors of
-# programs and pins jlog v0.2.0 (#57).
-BASE = '8d8885f2b8245fea28e643f0c1d2539a26480f18'
+# The merge of jnterfaces#62. It installs the programs of a profile (#39), runs integration before coverage-check
+# (#52), runs integration once in just verify (#54), pins smalldocs 0.5.12 (#55), reads the version floors of
+# programs (#57), and installs jlog v0.3.0 from its release binary (#62).
+BASE = '99b12a5a9b25931f8c98897fd74e6fc061599163'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -228,6 +228,31 @@ class Workflow(unittest.TestCase):
         self.assertIn('python3 lab/ci_programs.py', text)
         self.assertRegex(text, r'(?m)^\s+run: just check$')
 
+    def test_verify_installs_the_pinned_release_binary_of_jlog(self):
+        # install.sh comes from the tag that it installs, so main cannot change what CI runs.
+        text = (REPO / '.github/workflows/verify.yml').read_text()
+        version = re.search(r'jlog/(v\d+\.\d+\.\d+)/scripts/install\.sh', text).group(1)
+        line = (f'curl -fsSL https://raw.githubusercontent.com/rahuldave/jlog/{version}/scripts/install.sh'
+                f' | sh -s -- --tag {version}')
+        step = re.search(r'(?ms)^      - name: Install jlog[^\n]*\n(.*?)(?=^      - )', text).group(1)
+        self.assertIn(line, step)
+        # The default shell of a run step has no pipefail, so a failed curl would still pass through sh.
+        self.assertRegex(step, r'(?m)^        shell: bash$')
+        self.assertIn('echo "$HOME/.local/bin" >> "$GITHUB_PATH"', step)
+        # setup-uv comes first, so install.sh makes the environments of the plugins of jlog.
+        self.assertLess(text.index('astral-sh/setup-uv@'), text.index(line))
+        # jlog is on PATH before just check, whose lab runs the installer of jnterfaces through it.
+        self.assertLess(text.index(line), text.index('run: just check'))
+        # Nothing builds jlog with cargo, and the cache keeps no build of it.
+        self.assertNotRegex(text, r'cargo[^\n]*install[^\n]*rahuldave/jlog')
+        self.assertNotIn('.cargo/bin/jlog', text)
+        self.assertNotRegex(text, r'key: .*jlog')
+        # The version is the one that the installer of jnterfaces at BASE asks for.
+        if READY:
+            script = subprocess.run(['git', '-C', str(JNTERFACES), 'show', f'{BASE}:scripts/install_stack.py'],
+                                    capture_output=True, text=True, check=True).stdout
+            self.assertIn(f'--tag {version}', script)
+
     def test_lint_runs_ruff_at_a_fixed_version(self):
         justfile = (REPO / 'Justfile').read_text()
         self.assertRegex(justfile, r'(?m)^ruff := "uvx --quiet ruff@\d+\.\d+\.\d+"$')
@@ -242,19 +267,34 @@ class Pin(unittest.TestCase):
     def test_the_docs_name_the_jlog_version_that_the_installer_of_jnterfaces_needs(self):
         script = subprocess.run(['git', '-C', str(JNTERFACES), 'show', f'{BASE}:scripts/install_stack.py'],
                                 capture_output=True, text=True, check=True).stdout
-        version = re.search(r"^JLOG_INSTALL = .*git checkout (v\d+\.\d+\.\d+)", script, re.M).group(1)
+        # The text can run over several lines of the script.
+        version = re.search(r"^JLOG_INSTALL = .*?git checkout (v\d+\.\d+\.\d+)", script, re.M | re.S).group(1)
         for page in self.PAGES:
             text = (REPO / page).read_text()
             # Each version such as v0.1.1 in these pages is a version of jlog, also across a line break.
             self.assertEqual(set(re.findall(r'\bv\d+\.\d+\.\d+\b', text)), {version}, page)
             self.assertRegex(text, rf'jlog`?\s+{re.escape(version)}', page)
 
+    def test_the_spec_installs_the_same_jlog_and_no_table_cell_holds_a_pipe(self):
+        script = subprocess.run(['git', '-C', str(JNTERFACES), 'show', f'{BASE}:scripts/install_stack.py'],
+                                capture_output=True, text=True, check=True).stdout
+        version = re.search(r"^JLOG_INSTALL = .*?git checkout (v\d+\.\d+\.\d+)", script, re.M | re.S).group(1)
+        spec = (REPO / 'docs/spec.md').read_text()
+        row = next(line for line in spec.splitlines() if line.startswith('| `jlog` |'))
+        self.assertIn(f'git checkout {version}', row)
+        self.assertIn(f'jlog/{version}/scripts/install.sh | sh -s -- --tag {version}', spec)
+        # A | in a table cell ends the cell on GitHub, even inside backticks, so the command sits under the table.
+        for page in ('README.md', 'docs/index.md', 'docs/spec.md'):
+            for line in (REPO / page).read_text().splitlines():
+                if line.startswith('|'):
+                    self.assertNotIn('install.sh |', line, page)
+
     def test_the_docs_name_the_commit_that_the_lab_pins(self):
         for page in ('README.md', 'docs/jnterfaces-entry.md'):
             text = (REPO / page).read_text()
             self.assertIn(f'`{BASE[:7]}`', text, page)
             # No other commit of the lab: the old pins are gone.
-            for old in ('f9e66f7', '7fe6811', '4b9b52d', '338ca39'):
+            for old in ('f9e66f7', '7fe6811', '4b9b52d', '338ca39', '8d8885f'):
                 self.assertNotIn(old, text, page)
         self.assertIn('`2cfb176`', (REPO / 'docs/jnterfaces-entry.md').read_text())
 
