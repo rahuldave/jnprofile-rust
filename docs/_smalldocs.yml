@@ -39,8 +39,6 @@ website:
     left: "Part of [jnterfaces](https://rahuldave.github.io/jnterfaces/) and its packages."
     right: "Built with [smalldocs](https://docs.smallish.dev/)."
 
-theme:
-  light: litera-reading
-  dark: darkly-reading
+theme: atelier
 toc: true
 code-copy: true
