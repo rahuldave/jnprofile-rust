@@ -82,6 +82,27 @@ class Floor(unittest.TestCase):
 
 
 
+
+class Site(unittest.TestCase):
+    """The site uses the Atelier theme, as every smalldocs site of the user does."""
+
+    def test_the_site_uses_atelier_and_no_other_theme(self):
+        config = (REPO / 'docs/_smalldocs.yml').read_text()
+        self.assertRegex(config, r'(?m)^theme: atelier$')
+        # A dotfile such as .DS_Store is no theme.
+        names = sorted(path.name for path in (REPO / 'docs/_extensions').iterdir() if not path.name.startswith('.'))
+        self.assertEqual(names, ['atelier'])
+        theme = REPO / 'docs/_extensions/atelier'
+        self.assertIn('source: rahuldave/smalldocs-atelier', (theme / '.source').read_text())
+        # The sheets and the fonts that the pages load, and the licence of each font family.
+        for name in ('atelier.css', 'atelier-dark.css', 'fonts/dmsans-OFL.txt', 'fonts/ibmplexmono-OFL.txt'):
+            self.assertTrue((theme / name).is_file(), name)
+        fonts = sorted(path.name for path in (theme / 'fonts').glob('*.ttf'))
+        self.assertEqual(len(fonts), 7, fonts)
+        css = (theme / 'atelier.css').read_text() + (theme / 'atelier-dark.css').read_text()
+        for font in re.findall(r'url\(["\']?fonts/([^"\')]+)', css):
+            self.assertTrue((theme / 'fonts' / font).is_file(), font)
+
 class Release(unittest.TestCase):
     """just release passes its words to the script, so just release --dry-run makes no tag."""
 
