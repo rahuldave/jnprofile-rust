@@ -167,14 +167,18 @@ def ignored(path):
     return git('check-ignore', '--quiet', '--', path).returncode == 0
 
 
-def worktree_tree():
+def worktree_tree(skipped=()):
     """The tree hash of every file of the worktree, staged or not, that git does not ignore, or None on an error.
 
     It starts from HEAD in a temporary index of its own, so neither the real index nor a second run at the same time
-    changes. The tree only ties a report to its run: steps.py compares it with its own trees, never with the tree of
-    jlog or jagt, which start from a copy of the index. The folders target and .jnprofile-rust of the project never
+    changes. Freshness compares this full tree only with its own trees, never with the tree of jlog or jagt, which
+    start from a copy of the index. Coverage uses the eligible snapshot described below. The folders target and
+    .jnprofile-rust of the project never
     count. A file that git cannot index, such as a nested repository with no commit, gives None, and git's message goes
     to the error output.
+
+    SKIPPED names only unreadable untracked paths already excluded by coverage. With no argument, freshness
+    callers retain the full-tree contract. These literal paths never become coverage source exemptions.
     """
     WORK.mkdir(parents=True, exist_ok=True)
     handle, name = tempfile.mkstemp(dir=WORK, suffix='.index')
@@ -187,6 +191,7 @@ def worktree_tree():
             subprocess.run(['git', 'read-tree', 'HEAD'], env=env, check=True, capture_output=True)
         # git refuses to name an ignored path, even to exclude it, so the exclude is only for a folder that git sees.
         specs = [':/'] + [f':(exclude){folder}' for folder in ('target', str(API_WORK)) if not ignored(folder)]
+        specs += [f':(exclude,literal){path}' for path in skipped]
         subprocess.run(['git', 'add', '-A', '--', *specs], env=env, check=True, capture_output=True)
         return subprocess.run(['git', 'write-tree'], env=env, check=True, capture_output=True,
                               text=True).stdout.strip()
@@ -779,9 +784,24 @@ def coverage():
     WORK.mkdir(parents=True, exist_ok=True)
     kept = WORK / 'lcov.info'
     kept.write_text(filter_lcov(merge_lcov(texts), root, excluded))
-    code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept),
-                           '--compare-branch', 'HEAD', '--include-untracked', '--fail-under', '100',
-                           *(['--exclude', *exclude_patterns(skipped)] if skipped else [])]).returncode
+    try:
+        tree = worktree_tree(skipped)
+        if not tree:
+            print('coverage-check: cannot establish the eligible worktree snapshot', file=sys.stderr)
+            return 1
+        with tempfile.TemporaryDirectory(dir=WORK, prefix='diff-cover-') as folder:
+            env = dict(os.environ, GIT_INDEX_FILE=str((Path(folder) / 'index').resolve()))
+            subprocess.run(['git', 'read-tree', tree], env=env, check=True, capture_output=True)
+            repository = git('rev-parse', '--show-toplevel')
+            if repository.returncode:
+                raise OSError('git cannot locate the repository root')
+            code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept.resolve()),
+                                   '--compare-branch', 'HEAD', '--include-untracked', '--fail-under', '100',
+                                   *(['--exclude', *exclude_patterns(skipped)] if skipped else [])],
+                                  env=env, cwd=repository.stdout.strip()).returncode
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f'coverage-check: cannot check the eligible worktree snapshot: {error}', file=sys.stderr)
+        return 1
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
     for path in missing:
