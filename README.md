@@ -14,7 +14,9 @@ of the commit gates is in [docs/spec.md](docs/spec.md).
 
 The documentation site is https://rahuldave.github.io/jnprofile-rust/. Its
 pages are in `docs/`. `just docs` shows a preview of the site, and
-`just docs-publish` publishes it to the branch `gh-pages`.
+`just docs-publish` publishes it to the branch `gh-pages`. On each push to
+`main`, the job `docs` of `.github/workflows/verify.yml` runs
+`just docs-publish` after the job `verify` passes, so the site follows `main`.
 
 ## Install
 
@@ -87,8 +89,9 @@ names, and nossaifd at a fixed commit. In CI, a lab that cannot run fails, and
 does not skip.
 
 On each push to `main`, the job `release` of `.github/workflows/verify.yml`
-runs `just release` after the job `verify` passes. Only that job can write to
-the repository, to push the tag. So nobody tags by hand. The script is
+runs `just release` after the job `verify` passes. Only that job and the job
+`docs` can write to the repository, to push the tag and the site. So nobody tags
+by hand. The script is
 `scripts/release_tag.py`, a copy of the script of the gpa skill of
 agent_gest_git_skills. The section "Release tags" of its
 `docs/integration_delivery_workflow.md` gives the rules.
