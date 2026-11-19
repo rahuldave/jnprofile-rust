@@ -59,6 +59,10 @@ The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.wo
 
 `coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes.
 
+An untracked path that is not a file, such as a link to a folder, does not count. The jnterfaces installer makes such a link, `.claude/skills/rust-profile`. `diff-cover` cannot read it, so the step leaves it out.
+
+Such a path whose name holds a `\` stops the step. `diff-cover` reads each `\` as a `/`, so to leave out that path it would leave out other files too. Rename it, remove it or add it to `.gitignore`.
+
 The step merges the report of `test` and that of `integration` into one report, and gives it to `diff-cover`. A line that one of them runs passes. A line that one report measures and no report runs fails, also when the other report does not measure it, as for code under `#[cfg(not(test))]`. It reads each report only for the same run ID and the same worktree tree.
 
 On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step checks each line of the merged report, and it names each line that no test runs.
