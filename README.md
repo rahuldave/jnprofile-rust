@@ -96,3 +96,16 @@ agent_gest_git_skills. The section "Release tags" of its
 ## License
 
 The license is MIT. See [LICENSE](LICENSE).
+
+## Reviewed upstream imports
+
+The Rust test-review rules permit exact coverage exclusions for unchanged files from a pinned third-party
+release after independent review. They require complete archive and per-file identity evidence, always-run
+project source checks in check and CI, and a staged commit guard. The profile supplies no automatic vendor
+exemption or provenance verifier. Keep caller behavior tests; integrity does not qualify runtime behavior.
+See [the coverage exclusion rules](docs/tools.md#reviewed-coverage-exclusions) before preparing an import.
+
+## Recommendations
+
+Prefer coverage for reachable Rust code. For a pinned upstream import, independently review the source
+checks and exact exclusions, then commit the exclusions before importing source.
