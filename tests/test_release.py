@@ -14,12 +14,13 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / 'scripts' / 'release_tag.py'
 WORKFLOW = ROOT / '.github' / 'workflows' / 'verify.yml'
-# The Git blob of release_tag.py at the commit e03015c of agent_gest_git_skills. A change of the copy comes from there.
-UPSTREAM_BLOB = '5830085f986ce05fc2c7dddb680e3e34263a2b1f'
+# The Git blob of release_tag.py at the commit 26ef730 of agent_gest_git_skills. A change of the copy comes from there.
+UPSTREAM_BLOB = '7869b962ca04da0efb9d6756c79a15da587fcaa8'
 # A git hook sets these for the repository of the hook, and the scratch repository must not use them.
 HOOK_VARIABLES = ('GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_OBJECT_DIRECTORY')
 # The commit-msg hook of the commit gate sets these for release-check, and the scratch repository must not see them.
-RELEASE_VARIABLES = ('JN_RELEASE_MESSAGE', 'JN_RELEASE_AMEND')
+RELEASE_VARIABLES = ('JN_RELEASE_MESSAGE', 'JN_RELEASE_AMEND', 'JN_RELEASE_CLEANUP', 'JN_RELEASE_EDITOR',
+                     'GIT_EDITOR')
 # Git with no config of the user, such as a signing key, and a fixed author.
 GIT_ENV = {key: value for key, value in os.environ.items() if key not in HOOK_VARIABLES + RELEASE_VARIABLES}
 GIT_ENV |= {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
@@ -87,7 +88,7 @@ class WorkflowTest(unittest.TestCase):
 class CopyTest(unittest.TestCase):
     def test_the_script_is_the_copy_of_upstream(self):
         blob = run(['git', 'hash-object', str(SCRIPT)], ROOT).stdout.strip()
-        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills e03015c')
+        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills 26ef730')
 
 
 class HookTest(unittest.TestCase):
@@ -96,7 +97,8 @@ class HookTest(unittest.TestCase):
 
     def test_the_scripts_tests_pass_with_the_variables_of_release_check_exported(self):
         """A developer may have exported them. Then every check of the scratch repository would read their file."""
-        env = {**os.environ, 'JN_RELEASE_MESSAGE': os.path.join(ROOT, 'no-such-message'), 'JN_RELEASE_AMEND': '1'}
+        env = {**os.environ, 'JN_RELEASE_MESSAGE': os.path.join(ROOT, 'no-such-message'), 'JN_RELEASE_AMEND': '1',
+               'JN_RELEASE_CLEANUP': 'verbatim', 'JN_RELEASE_EDITOR': 'unknown', 'GIT_EDITOR': ':'}
         done = subprocess.run([sys.executable, '-m', 'unittest', 'tests.test_release.ScriptTest'], cwd=ROOT, env=env,
                               capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -150,7 +152,6 @@ class ScriptTest(unittest.TestCase):
         self.commit('chore: squash\n\n* fix(api): a bug')
         self.assertIn('the next tag is v0.1.1', self.script('--check').stdout)
 
-
     def test_check_counts_the_commit_being_made_from_the_message_file(self):
         """The commit-msg hook of the commit gate names the message file in JN_RELEASE_MESSAGE."""
         self.commit('feat: start')
@@ -169,6 +170,47 @@ class ScriptTest(unittest.TestCase):
         self.assertIn('the next tag is v0.2.0', check('docs: a page\n\n- feat: a bullet\n'))
         self.commit('fix: a bug')
         self.assertIn('no release', check('chore: reword\n', JN_RELEASE_AMEND='1'))
+
+    def test_check_stops_an_amend_of_the_release_and_skips_a_merge(self):
+        """The tag stays on the old commit after an amend, and the release skips merge commits."""
+        self.commit('feat: start')
+        self.script()
+        message = Path(self.tmp.name) / 'COMMIT_EDITMSG'
+        message.write_text('fix: a bug\n')
+        env = {**GIT_ENV, 'JN_RELEASE_MESSAGE': str(message)}
+
+        def check(**extra):
+            return subprocess.run([sys.executable, str(SCRIPT), '--check'], cwd=self.repo, env={**env, **extra},
+                                  capture_output=True, text=True)
+        stopped = check(JN_RELEASE_AMEND='1')
+        self.assertEqual(stopped.returncode, 1, stopped.stdout)
+        self.assertIn('HEAD is the release v0.1.0', stopped.stderr + stopped.stdout)
+        maybe = check(JN_RELEASE_AMEND='maybe')
+        self.assertEqual(maybe.returncode, 1, maybe.stdout)
+        self.assertIn('it may be an amend', maybe.stderr + maybe.stdout)
+        head = run(['git', 'rev-parse', 'HEAD'], self.repo).stdout.strip()
+        (self.repo / '.git/MERGE_HEAD').write_text(head + '\n')
+        self.assertIn('no release', check().stdout)
+        (self.repo / '.git/MERGE_HEAD').unlink()
+        self.assertIn('the next tag is v0.1.1', check().stdout)
+
+    def test_without_an_editor_the_comment_lines_count(self):
+        """In a hook, git sets GIT_EDITOR to : for git commit -m, and then keeps the comment lines."""
+        self.commit('feat: start')
+        self.script()
+        message = Path(self.tmp.name) / 'COMMIT_EDITMSG'
+        env = {**GIT_ENV, 'JN_RELEASE_MESSAGE': str(message)}
+
+        def check(**extra):
+            return subprocess.run([sys.executable, str(SCRIPT), '--check'], cwd=self.repo, env={**env, **extra},
+                                  capture_output=True, text=True, check=True).stdout
+        # A subject that is not conventional asks for a patch. After an editor, git drops it as a comment line.
+        message.write_text('#12 fix login\n')
+        self.assertIn('no release', check())
+        self.assertIn('no release', check(GIT_EDITOR=':', JN_RELEASE_CLEANUP='strip'))
+        self.assertIn('the next tag is v0.1.1', check(GIT_EDITOR=':'))
+        self.assertIn('the next tag is v0.1.1', check(JN_RELEASE_CLEANUP='verbatim'))
+        self.assertIn('the next tag is v0.1.1', check(GIT_EDITOR=':', JN_RELEASE_CLEANUP='unknown'))
 
 
 if __name__ == '__main__':
