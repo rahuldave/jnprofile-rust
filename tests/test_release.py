@@ -14,12 +14,14 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / 'scripts' / 'release_tag.py'
 WORKFLOW = ROOT / '.github' / 'workflows' / 'verify.yml'
-# The Git blob of release_tag.py at the commit fbf0837 of agent_gest_git_skills. A change of the copy comes from there.
-UPSTREAM_BLOB = '28294abb7175e6ee90970ed2e136536a18daca50'
+# The Git blob of release_tag.py at the commit e03015c of agent_gest_git_skills. A change of the copy comes from there.
+UPSTREAM_BLOB = '5830085f986ce05fc2c7dddb680e3e34263a2b1f'
 # A git hook sets these for the repository of the hook, and the scratch repository must not use them.
 HOOK_VARIABLES = ('GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_OBJECT_DIRECTORY')
+# The commit-msg hook of the commit gate sets these for release-check, and the scratch repository must not see them.
+RELEASE_VARIABLES = ('JN_RELEASE_MESSAGE', 'JN_RELEASE_AMEND')
 # Git with no config of the user, such as a signing key, and a fixed author.
-GIT_ENV = {key: value for key, value in os.environ.items() if key not in HOOK_VARIABLES}
+GIT_ENV = {key: value for key, value in os.environ.items() if key not in HOOK_VARIABLES + RELEASE_VARIABLES}
 GIT_ENV |= {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
             'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.com',
             'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.com'}
@@ -85,12 +87,19 @@ class WorkflowTest(unittest.TestCase):
 class CopyTest(unittest.TestCase):
     def test_the_script_is_the_copy_of_upstream(self):
         blob = run(['git', 'hash-object', str(SCRIPT)], ROOT).stdout.strip()
-        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills fbf0837')
+        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills e03015c')
 
 
 class HookTest(unittest.TestCase):
     def test_git_env_has_no_variable_of_a_hook(self):
         self.assertFalse(set(HOOK_VARIABLES) & set(GIT_ENV))
+
+    def test_the_scripts_tests_pass_with_the_variables_of_release_check_exported(self):
+        """A developer may have exported them. Then every check of the scratch repository would read their file."""
+        env = {**os.environ, 'JN_RELEASE_MESSAGE': os.path.join(ROOT, 'no-such-message'), 'JN_RELEASE_AMEND': '1'}
+        done = subprocess.run([sys.executable, '-m', 'unittest', 'tests.test_release.ScriptTest'], cwd=ROOT, env=env,
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 class ScriptTest(unittest.TestCase):
@@ -140,6 +149,26 @@ class ScriptTest(unittest.TestCase):
         self.assertIn('no release', self.script('--check').stdout)
         self.commit('chore: squash\n\n* fix(api): a bug')
         self.assertIn('the next tag is v0.1.1', self.script('--check').stdout)
+
+
+    def test_check_counts_the_commit_being_made_from_the_message_file(self):
+        """The commit-msg hook of the commit gate names the message file in JN_RELEASE_MESSAGE."""
+        self.commit('feat: start')
+        self.script()
+        message = Path(self.tmp.name) / 'COMMIT_EDITMSG'
+
+        def check(text, **extra):
+            message.write_text(text)
+            env = {**GIT_ENV, 'JN_RELEASE_MESSAGE': str(message), **extra}
+            return subprocess.run([sys.executable, str(SCRIPT), '--check'], cwd=self.repo, env=env,
+                                  capture_output=True, text=True, check=True).stdout
+        self.assertIn('no release', self.script('--check').stdout)
+        self.assertIn('the next tag is v0.1.1', check('fix: a bug\n'))
+        self.assertIn('and the commit being made', check('fix: a bug\n'))
+        self.assertIn('no release', check('chore: tidy\n\n# Please enter the commit message\n# fix: not a line\n'))
+        self.assertIn('the next tag is v0.2.0', check('docs: a page\n\n- feat: a bullet\n'))
+        self.commit('fix: a bug')
+        self.assertIn('no release', check('chore: reword\n', JN_RELEASE_AMEND='1'))
 
 
 if __name__ == '__main__':
