@@ -1,4 +1,4 @@
-"""Tests of the helper script .agents/just/rust/steps.py, without cargo."""
+"""Tests of the helper script .agents/just/rust/steps.py, including isolated Cargo coverage fixtures."""
 import concurrent.futures
 import contextlib
 import io
@@ -97,6 +97,238 @@ class Merge(unittest.TestCase):
         root = Path('/p')
         self.assertEqual(steps.missed_lines('SF:/p/b.rs\nDA:5,0\nDA:6,2\nend_of_record\nSF:/p/a.rs\nDA:3,0\n'
                                             'end_of_record\n', root), ['a.rs:3', 'b.rs:5'])
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov'), 'needs cargo-llvm-cov')
+class ExampleCoverage(unittest.TestCase):
+    """Real instrumented examples, including a separate source module, through the ordinary producer and gate."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix='rust example [coverage] ')
+        self.addCleanup(temp.cleanup)
+        self.root = Path(os.path.realpath(temp.name))
+        self.env = dict(os.environ, JLOG_RUN='example-regression',
+                        CARGO_LLVM_COV_TARGET_DIR=str(self.root / 'artifacts'))
+        self.env.pop('CARGO_LLVM_COV_BUILD_DIR', None)
+        self.write('.gitignore', '/target/\n/artifacts/\n/Cargo.lock\n')
+        self.write('.agents/stack.json', '{"steps": ["test", "integration"]}')
+        self.git('init', '-q')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'base')
+        self.write('Cargo.toml', '[package]\nname="example_fixture"\nversion="0.1.0"\n'
+                   'edition="2021"\nautoexamples=false\n'
+                   '[[example]]\nname="walk"\ntest=true\nharness=false\n')
+        self.write('src/lib.rs', 'pub fn value() -> u32 { 7 }\n')
+        self.write('examples/walk.rs', 'mod support;\ninclude!("included.rs");\nfn main() {\n'
+                   '    assert_eq!(support::value(), included());\n'
+                   '    let path = "target/example-executions";\n'
+                   '    let count: u32 = std::fs::read_to_string(path).unwrap_or_default().parse().unwrap_or(0);\n'
+                   '    std::fs::write(path, (count + 1).to_string()).unwrap();\n}\n')
+        self.write('examples/support/mod.rs', 'pub fn value() -> u32 {\n    example_fixture::value()\n}\n')
+        self.write('examples/included.rs', 'fn included() -> u32 { 7 }\n')
+        self.command(['cargo', 'generate-lockfile', '--offline'])
+
+    def write(self, path, text):
+        path = self.root / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def git(self, *args):
+        self.command(['git', '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', *args])
+
+    def command(self, argv, expected=0):
+        done = subprocess.run(argv, cwd=self.root, env=self.env, capture_output=True, text=True)
+        evidence = os.environ.get('RUST_EXAMPLE_EVIDENCE')
+        if evidence:
+            folder = Path(evidence) / self.id().split('.')[-1]
+            folder.mkdir(parents=True, exist_ok=True)
+            with (folder / 'commands.log').open('a') as log:
+                log.write(f'{argv!r}\nexit={done.returncode}\n{done.stdout}{done.stderr}\n')
+            for source in (self.root / 'target/llvm-cov').glob('*.lcov'):
+                shutil.copyfile(source, folder / source.name)
+        if expected is not None:
+            self.assertEqual(done.returncode, expected, done.stdout + done.stderr)
+        return done
+
+    def runner(self, *args, expected=0):
+        return self.command([sys.executable, str(REPO / '.agents/just/rust/steps.py'), *args], expected)
+
+    def measured(self, *args):
+        self.runner('run', 'test')
+        self.runner('run', 'integration', *args)
+        return (self.root / 'target/llvm-cov/integration.lcov').read_text()
+
+    def test_executed_example_and_module_are_reported_and_pass_the_gate(self):
+        text = self.measured()
+        self.assertIn(f'SF:{self.root}/examples/walk.rs\n', text)
+        self.assertIn(f'SF:{self.root}/examples/support/mod.rs\n', text)
+        self.assertIn(f'SF:{self.root}/examples/included.rs\n', text)
+        self.assertEqual((self.root / 'target/example-executions').read_text(), '1')
+        self.runner('fresh', 'integration')
+        self.runner('coverage')
+
+    def test_unexecuted_example_module_branch_is_zero_and_fails_the_gate(self):
+        self.write('examples/support/mod.rs', 'pub fn value() -> u32 {\n'
+                   '    if std::env::var_os("EXAMPLE_UNRUN").is_some() {\n'
+                   '        return 9;\n    }\n    example_fixture::value()\n}\n')
+        self.env.pop('EXAMPLE_UNRUN', None)
+        text = self.measured()
+        self.assertIn(f'SF:{self.root}/examples/support/mod.rs\n', text)
+        self.assertIn('DA:3,0\n', text)
+        self.runner('coverage', expected=1)
+
+    def test_changed_example_not_built_is_still_missing_source(self):
+        self.write('examples/unbuilt.rs', 'fn main() { println!("not built"); }\n')
+        self.write('Cargo.toml', (self.root / 'Cargo.toml').read_text()
+                   + '[[example]]\nname="unbuilt"\ntest=false\nharness=false\n')
+        text = self.measured()
+        self.assertNotIn(f'SF:{self.root}/examples/unbuilt.rs\n', text)
+        done = self.runner('coverage', expected=1)
+        self.assertIn('examples/unbuilt.rs: a changed file', done.stdout)
+
+    def test_caller_regex_explicit_selection_and_no_clean_are_preserved(self):
+        text = self.measured('--example', 'walk', '--no-clean', '--ignore-filename-regex', 'included[.]rs$')
+        self.assertIn(f'SF:{self.root}/examples/walk.rs\n', text)
+        self.assertNotIn('included.rs', text)
+        self.runner('fresh', 'integration', expected=1)
+        self.runner('coverage', expected=1)
+
+    def test_remapped_paths_preserve_example_modules(self):
+        text = self.measured('--remap-path-prefix')
+        self.assertIn('SF:examples/walk.rs\n', text)
+        self.assertIn('SF:examples/support/mod.rs\n', text)
+        self.assertNotIn('DA:3,0', text)
+        self.runner('coverage')
+
+    def test_dependency_and_generated_test_sources_are_not_supplemented(self):
+        cargo = (self.root / 'Cargo.toml').read_text()
+        self.write('Cargo.toml', cargo + '[dependencies]\nlocal_dep={path="examples/vendor/dep"}\n')
+        self.write('examples/vendor/dep/Cargo.toml',
+                   '[package]\nname="local_dep"\nversion="0.1.0"\nedition="2021"\n[workspace]\n')
+        self.write('examples/vendor/dep/src/lib.rs', 'pub fn value() -> u32 { 7 }\n')
+        self.write('build.rs', 'fn main() {\n    std::fs::write('
+                   'std::path::Path::new(&std::env::var("OUT_DIR").unwrap())'
+                   '.join("generated.rs"), "pub fn value() -> u32 { 7 }").unwrap();\n}\n')
+        self.write('examples/support/mod.rs', 'mod generated { include!(concat!(env!("OUT_DIR"), "/generated.rs")); }\n'
+                   '#[path="../tests/control.rs"] mod control;\n'
+                   '#[path="../configured vendor/control.rs"] mod vendor;\n'
+                   '#[path="../vendor/dep/src/lib.rs"] mod dep_source;\n'
+                   'pub fn value() -> u32 {\n    assert_eq!(generated::value(), control::value());\n'
+                   '    assert_eq!(vendor::value(), dep_source::value());\n    local_dep::value()\n}\n')
+        self.write('examples/tests/control.rs', 'pub fn value() -> u32 { 7 }\n')
+        self.write('examples/configured vendor/control.rs', 'pub fn value() -> u32 { 7 }\n')
+        self.write('.cargo/config.toml', '[build]\nbuild-dir="examples/build output [x]"\n'
+                   'target-dir="examples/target output [x]"\n'
+                   '[source.unused-vendor]\ndirectory="examples/configured vendor"\n')
+        self.env.pop('CARGO_LLVM_COV_TARGET_DIR')
+        self.command(['cargo', 'generate-lockfile', '--offline'])
+        text = self.measured()
+        self.assertIn(f'SF:{self.root}/examples/support/mod.rs\n', text)
+        self.assertNotIn('vendor/dep/', text)
+        self.assertNotIn('generated.rs', text)
+        self.assertNotIn('tests/control.rs', text)
+        self.assertNotIn('configured vendor', text)
+        self.assertNotIn('build output', text)
+        self.assertNotIn('target output', text)
+        # The same dependency file is also compiled into the example, so its raw SF proves ownership rejection.
+        raw = (self.root / 'target/llvm-cov/integration.part0.examples.lcov').read_text()
+        for excluded in ('vendor/dep/', 'generated.rs', 'tests/control.rs', 'configured vendor'):
+            self.assertIn(excluded, raw)
+
+    def test_custom_entrypoint_path_keeps_included_example_sources(self):
+        cargo = (self.root / 'Cargo.toml').read_text()
+        self.write('Cargo.toml', cargo + 'path="custom/[walk].rs"\n')
+        original = (self.root / 'examples/walk.rs').read_text()
+        self.write('custom/[walk].rs', original.replace('mod support;',
+                   '#[path="../examples/support/mod.rs"] mod support;')
+                   .replace('include!("included.rs")', 'include!("../examples/included.rs")'))
+        (self.root / 'examples/walk.rs').unlink()
+        text = self.measured()
+        self.assertIn(f'SF:{self.root}/custom/[walk].rs\n', text)
+        self.assertIn('examples/included.rs', steps.reported(text, self.root))
+        self.runner('coverage')
+
+    def test_positional_filter_and_cargo_only_options_keep_the_original_test_domain(self):
+        text = self.measured('parse', '--config', 'net.offline=true', '--message-format', 'short',
+                             '--future-incompat-report', '--timings', '--ignore-rust-version', '--profile', 'dev')
+        self.assertIn(f'SF:{self.root}/examples/walk.rs\n', text)
+        self.assertIn(f'SF:{self.root}/examples/support/mod.rs\n', text)
+        self.assertEqual((self.root / 'target/example-executions').read_text(), '1')
+        self.runner('coverage')
+
+    def test_every_manifest_spelling_uses_the_real_project_and_one_execution(self):
+        project = self.root / 'project'
+        project.mkdir()
+        for name in ('Cargo.toml', 'Cargo.lock', 'src', 'examples'):
+            shutil.move(self.root / name, project / name)
+        self.write('.gitignore', (self.root / '.gitignore').read_text() + '/project/target/\n')
+        (project / 'target').mkdir()
+        for manifest in (['--manifest-path', 'project/Cargo.toml'], ['--manifest-path=project/Cargo.toml'],
+                         ['-m', 'project/Cargo.toml'], ['-mproject/Cargo.toml'], ['-m=project/Cargo.toml']):
+            with self.subTest(manifest=manifest):
+                (project / 'target/example-executions').unlink(missing_ok=True)
+                self.runner('run', 'test', *manifest, '--lib')
+                self.runner('run', 'integration', *manifest, '--example', 'walk')
+                text = (self.root / 'target/llvm-cov/integration.lcov').read_text()
+                self.assertIn('project/examples/walk.rs', steps.reported(text, self.root))
+                self.assertIn('project/examples/support/mod.rs', steps.reported(text, self.root))
+                self.assertEqual((project / 'target/example-executions').read_text(), '1')
+                self.runner('coverage')
+
+    def test_only_effective_llvm_output_roots_are_excluded_for_cli_file_and_environment_config(self):
+        self.env.pop('CARGO_TARGET_DIR', None)
+        self.env.pop('CARGO_BUILD_BUILD_DIR', None)
+        self.write('.gitignore', '/target/\n/artifacts/\n/Cargo.lock\n/examples/llvm-cov-target/\n'
+                   '/examples/instrumented target [[]x]/\n/examples/instrumented build [[]x]/\n')
+        self.write('build.rs', 'fn main() {\n    std::fs::write('
+                   'std::path::Path::new(&std::env::var("OUT_DIR").unwrap())'
+                   '.join("generated.rs"), "pub fn value() -> u32 { 7 }").unwrap();\n}\n')
+        self.write('examples/support/mod.rs', 'mod generated { include!(concat!(env!("OUT_DIR"), "/generated.rs")); }\n'
+                   'pub fn value() -> u32 {\n    assert_eq!(generated::value(), 7);\n    example_fixture::value()\n}\n')
+        cases = [
+            ('CLI', '', str(self.root / 'artifacts'), None, ['--config', 'build.target-dir="examples"'], 'artifacts'),
+            ('file', '[build]\ntarget-dir="examples"\nbuild-dir="examples"\n', None, None, [],
+             'examples/llvm-cov-target'),
+            ('environment', '[build]\ntarget-dir="examples"\nbuild-dir="examples/base build"\n',
+             'examples/instrumented target [x]', 'examples/instrumented build [x]', [],
+             'examples/instrumented build [x]'),
+            ('inactive build override', '[build]\ntarget-dir="examples"\n', 'examples/instrumented target [x]',
+             'examples/support', [], 'examples/instrumented target [x]'),
+        ]
+        for name, config, target, build, args, effective in cases:
+            with self.subTest(context=name):
+                self.write('.cargo/config.toml', config)
+                for key, value in (('CARGO_LLVM_COV_TARGET_DIR', target), ('CARGO_LLVM_COV_BUILD_DIR', build)):
+                    self.env.pop(key, None)
+                    if value is not None:
+                        self.env[key] = value
+                (self.root / 'target/example-executions').unlink(missing_ok=True)
+                text = self.measured(*args)
+                self.assertIn('examples/walk.rs', steps.reported(text, self.root))
+                self.assertIn('examples/support/mod.rs', steps.reported(text, self.root))
+                self.assertNotIn('generated.rs', text)
+                raw = (self.root / 'target/llvm-cov/integration.part0.examples.lcov').read_text()
+                generated = [Path(line[3:]).resolve() for line in raw.splitlines()
+                             if line.startswith('SF:') and line.endswith('/generated.rs')]
+                self.assertTrue(generated, raw)
+                self.assertTrue(all(path.is_relative_to(self.root / effective) for path in generated), generated)
+                self.assertEqual((self.root / 'target/example-executions').read_text(), '1')
+                self.runner('coverage')
+
+    def test_excluded_workspace_package_stays_out_of_the_supplement(self):
+        cargo = (self.root / 'Cargo.toml').read_text()
+        self.write('Cargo.toml', cargo + '[workspace]\nmembers=["other"]\n'
+                   '[dependencies]\nother={path="other"}\n')
+        self.write('other/Cargo.toml', '[package]\nname="other"\nversion="0.1.0"\nedition="2021"\n'
+                   '[lib]\npath="examples/lib.rs"\n')
+        self.write('other/examples/lib.rs', 'pub fn value() -> u32 { 7 }\n')
+        self.write('examples/support/mod.rs', 'pub fn value() -> u32 {\n    other::value()\n}\n')
+        self.command(['cargo', 'generate-lockfile', '--offline'])
+        for flag in ('--exclude', '--exclude-from-report'):
+            with self.subTest(flag=flag):
+                text = self.measured('--workspace', flag, 'other')
+                self.assertIn(f'SF:{self.root}/examples/support/mod.rs\n', text)
+                self.assertNotIn('/other/', text)
 
 
 class Targets(unittest.TestCase):
@@ -231,6 +463,21 @@ class Targets(unittest.TestCase):
             self.assertEqual(steps.run_tests('test', []), 1)
         self.assertIn('test: cargo metadata failed', err.getvalue())
         self.assertFalse(self.log.exists())
+
+    def test_explicit_dependency_or_raw_report_policy_does_not_add_an_example_supplement(self):
+        for args in (['--dep-coverage', 'dep'], ['--dep-coverage=dep'],
+                     ['--no-default-ignore-filename-regex'], ['--disable-default-ignore-filename-regex']):
+            with mock.patch.object(steps, 'example_sources', side_effect=AssertionError('must keep caller policy')):
+                self.assertEqual(steps.example_lcov(steps.COVERAGE, None, args), 0)
+
+    def test_a_supplement_failure_or_unknown_ownership_cannot_stamp_the_run(self):
+        self.packages(['lib'])
+        for failure in (mock.Mock(return_value=91), mock.Mock(side_effect=SystemExit('unknown ownership'))):
+            with mock.patch.object(steps, 'example_lcov', failure), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertIn(steps.run_tests('test', []), (1, 91))
+            self.assertFalse(steps.report('test').exists())
+            self.assertFalse(steps.pending_run('test').exists())
 
     def test_main_runs_only_the_two_steps(self):
         with contextlib.redirect_stderr(io.StringIO()) as err:
@@ -532,6 +779,41 @@ class Repository(unittest.TestCase):
             self.assertEqual(steps.coverage(), 0)
         diff_cover, = calls
         self.assertNotIn('--exclude', diff_cover)
+
+    def test_unreported_vendor_diagnostic_keeps_failure_without_claiming_no_execution(self):
+        self.commit_one()
+        self.files('vendor/dep/build.rs')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('vendor/dep/build.rs: a changed file that is absent from the coverage report', out)
+        self.assertIn('reporting scope or copied source paths', out)
+        self.assertNotIn('so no test runs it', out)
+        self.assertIn('independent review', out)
+
+    def test_exact_vendor_exclusion_requires_prior_commit_and_does_not_cover_neighbors(self):
+        self.commit_one()
+        (self.root / '.agents').mkdir(exist_ok=True)
+        listing = self.root / '.agents/coverage-exclude.txt'
+        listing.write_text('# Independently reviewed pinned upstream source; project verifies integrity.\n'
+                           'vendor/dep/build.rs\n')
+        self.files('vendor/dep/build.rs')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('vendor/dep/build.rs:', out)
+        self.git('add', '.agents/coverage-exclude.txt')
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.git('commit', '-q', '-m', 'reviewed exclusion prerequisite')
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        self.files('vendor/dep/src/lib.rs', 'vendor/neighbor/build.rs', 'src/adapted.rs')
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        for path in ('vendor/dep/src/lib.rs', 'vendor/neighbor/build.rs', 'src/adapted.rs'):
+            self.assertIn(path + ':', out)
+        self.assertNotIn('vendor/dep/build.rs:', out)
 
     def test_the_merged_report_leaves_out_the_generated_files_of_the_parent(self):
         self.commit_one()

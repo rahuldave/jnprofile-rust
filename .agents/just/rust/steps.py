@@ -13,6 +13,7 @@ HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent
 git matches their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top
 of the project, which can be a subfolder of the git repository.
 """
+import fnmatch
 import glob
 import importlib.util
 import json
@@ -420,6 +421,216 @@ def merge_lcov(texts):
                    + 'end_of_record\n' for path, lines in sorted(counts.items()))
 
 
+def example_options(args):
+    """Project the producer arguments onto source ownership and the supported 0.9.1 report interface.
+
+    The original test command keeps all arguments. Runtime filters and Cargo build options are not report
+    options. Caller thresholds apply to that original default report, never to an unrestricted diagnostic export.
+    """
+    values = {name: [] for name in ('--manifest-path', '--package', '--exclude', '--exclude-from-report', '--config')}
+    report_values = {'--manifest-path', '--package', '--profile', '--target', '--color', '--failure-mode',
+                     '--ignore-filename-regex'}
+    report_flags = {'--workspace', '--all', '--release', '--coverage-target-only', '--coverage-host-only',
+                    '--remap-path-prefix', '--include-ffi', '--doctests', '--include-build-script',
+                    '--summary-only', '--skip-functions', '--branch', '--mcdc', '--locked', '--frozen', '--offline'}
+    valued = set(values) | report_values | {'--bin', '--test', '--example', '--bench', '--features', '--jobs',
+        '--output-path', '--output-dir', '--exclude-from-test', '--dep-coverage', '--archive-file',
+        '--fail-under-functions', '--fail-under-lines', '--fail-under-file-lines', '--fail-under-regions',
+        '--fail-uncovered-lines', '--fail-uncovered-regions', '--fail-uncovered-functions',
+        '--message-format', '--lockfile-path', '-F', '-j', '-Z'}
+    before = args[:args.index('--')] if '--' in args else args
+    report, metadata, llvm_context = [], [], []
+    index = 0
+    while index < len(before):
+        arg = before[index]
+        name, equal, value = arg.partition('=')
+        for short, long in (('-m', '--manifest-path'), ('-p', '--package')):
+            if name == short or (arg.startswith(short) and not arg.startswith('--')):
+                name, value = long, arg[len(short):].removeprefix('=')
+                equal = bool(value)
+                break
+        if name in valued:
+            if not equal:
+                index += 1
+                value = before[index]
+            if name in values:
+                values[name].append(value)
+            if name in report_values:
+                report.extend((name, value))
+            if name in ('--manifest-path', '--config'):
+                metadata.extend((name, value))
+            if name == '--manifest-path':
+                llvm_context.extend((name, value))
+        else:
+            name = {'-r': '--release', '--doc': '--doctests'}.get(name, name)
+            if name in report_flags:
+                report.append(name)
+            if name in ('--offline', '--frozen'):
+                metadata.append(name)
+                llvm_context.append(name)
+        index += 1
+    return values, report, metadata, llvm_context
+
+
+def example_sources(args):
+    """Git-owned example sources, bounded by Cargo package ownership rather than an unrestricted raw export.
+
+    Keep the ordinary report and its upstream defaults. The supplement restores only nonignored workspace
+    example source files (including modules); dependency packages and Cargo output directories cannot own them.
+    Custom example entrypoints count too; other custom-path modules use the ordinary report. A source in tests,
+    benches or a test-named file stays outside this supplement, as it does in the upstream default report.
+    """
+    values, _, context, llvm_context = example_options(args)
+    before = args[:args.index('--')] if '--' in args else args
+    manifest = [item for value in values['--manifest-path'] for item in ['--manifest-path', value]]
+    done = subprocess.run(['cargo', 'metadata', '--format-version', '1', '--all-features', '--locked', *context],
+                          capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        raise SystemExit('coverage: cargo metadata cannot establish example source ownership')
+    data = json.loads(done.stdout)
+    if not data.get('workspace_members'):
+        return set()
+    root = Path(data['workspace_root']).resolve()
+    packages = {package['id']: package for package in data['packages']}
+    members = set(data['workspace_members'])
+
+    def ids(specs):
+        found = set()
+        for spec in specs:
+            if any(char in spec for char in '*?['):
+                found.update(key for key in members if fnmatch.fnmatchcase(packages[key]['name'], spec))
+            else:
+                done = subprocess.run(['cargo', 'pkgid', *context, '--package', spec], capture_output=True, text=True)
+                if done.returncode:
+                    raise SystemExit(f'coverage: cargo cannot resolve package {spec!r}')
+                found.add(done.stdout.strip())
+        return found
+
+    selected = members
+    if not any(arg in ('--workspace', '--all') for arg in before):
+        if values['--package']:
+            selected = ids(values['--package'])
+        else:
+            current = Path(values['--manifest-path'][-1] if manifest else 'Cargo.toml').resolve()
+            own = {key for key in members if Path(packages[key]['manifest_path']).resolve() == current}
+            selected = own or members
+    selected = selected - ids(values['--exclude'] + values['--exclude-from-report'])
+    selected = {key for key in selected if any('example' in target['kind'] for target in packages[key]['targets'])}
+    if not selected:
+        return set()
+    directories = {key: Path(package['manifest_path']).resolve().parent for key, package in packages.items()}
+    # llvm-cov loads its output context before passing Cargo-only --config arguments to the test command.
+    # Those overrides still matter to dependency ownership above, but cannot redefine its forced output roots.
+    llvm_data = data
+    if values['--config']:
+        done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1', '--locked', *llvm_context],
+                              capture_output=True, text=True)
+        if done.returncode:
+            sys.stderr.write(done.stderr)
+            raise SystemExit('coverage: cargo metadata cannot establish llvm-cov output roots')
+        llvm_data = json.loads(done.stdout)
+    target_override = os.environ.get('CARGO_LLVM_COV_TARGET_DIR')
+    target = (Path(target_override).resolve() if target_override is not None
+              else Path(llvm_data['target_directory']).resolve() / 'llvm-cov-target')
+    outputs = [target]
+    configured_build = 'CARGO_BUILD_BUILD_DIR' in os.environ
+    cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo')).resolve()
+    rustup_home = Path(os.environ.get('RUSTUP_HOME', Path.home() / '.rustup')).resolve()
+    outputs += [cargo_home / 'registry', cargo_home / 'git', rustup_home / 'toolchains']
+    # Conservatively retain every configured vendor directory, even if a nearer config overrides it.
+    # cargo-config2 (used by llvm-cov) resolves each relative source.directory above its .cargo folder.
+    configs = [parent / '.cargo' for parent in (Path.cwd(), *Path.cwd().parents)] + [cargo_home]
+    for folder in dict.fromkeys(configs):
+        config = folder / 'config'
+        if not config.is_file():
+            config = folder / 'config.toml'
+        if config.is_file():
+            try:
+                configuration = tomllib.loads(config.read_text())
+                configured_build = configured_build or 'build-dir' in configuration.get('build', {})
+                configured = configuration.get('source', {})
+                outputs += [(folder.parent / source['directory']).resolve() for source in configured.values()
+                            if isinstance(source, dict) and 'directory' in source]
+            except (OSError, ValueError, TypeError) as error:
+                raise SystemExit(f'coverage: cannot establish vendor ownership from {config}: {error}') from error
+    if configured_build:
+        if target_override is not None:
+            build = Path(os.environ.get('CARGO_LLVM_COV_BUILD_DIR', target)).resolve()
+        else:
+            build = Path(llvm_data.get('build_directory', llvm_data['target_directory'])).resolve() / 'llvm-cov-target'
+        outputs.append(build)
+    for override in values['--config']:
+        try:
+            if '=' in override:
+                configured, base = tomllib.loads(override), Path.cwd()
+            else:
+                config = Path(override).resolve()
+                configured, base = tomllib.loads(config.read_text()), config.parent.parent
+            outputs += [(base / source['directory']).resolve() for source in configured.get('source', {}).values()
+                        if isinstance(source, dict) and 'directory' in source]
+        except (OSError, ValueError, TypeError) as error:
+            raise SystemExit(f'coverage: cannot establish vendor ownership from --config: {error}') from error
+    entrypoints = {Path(target['src_path']).resolve() for key in selected for target in packages[key]['targets']
+                   if 'example' in target['kind']}
+    files = git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.rs')
+    if files.returncode:
+        raise SystemExit('coverage: git cannot establish example source ownership')
+    sources = set()
+    for file in filter(None, files.stdout.split('\0')):
+        path = Path(file).resolve()
+        if (not path.is_relative_to(root) or any(path.is_relative_to(output) for output in outputs)
+                or re.search(r'/rustc/(?:[0-9a-f]+|[0-9]+\.[0-9]+\.[0-9]+)/', str(path))):
+            continue
+        owners = [key for key, directory in directories.items() if path.is_relative_to(directory)]
+        if not owners:
+            continue
+        owner = max(owners, key=lambda key: len(directories[key].parts))
+        local = path.relative_to(directories[owner])
+        if owner not in selected or ('examples' not in local.parts[:-1] and path not in entrypoints):
+            continue
+        if {'tests', 'benches'} & set(local.parts[:-1]) or re.fullmatch(r'(?:tests|[\w-]+[_-]tests)\.rs', path.name):
+            continue
+        ignored = git('check-ignore', '--quiet', '--', file).returncode
+        if ignored not in (0, 1):
+            raise SystemExit(f'coverage: git cannot establish ownership of {file!r}')
+        if ignored == 0:
+            continue
+        sources.update((str(path), path.relative_to(root).as_posix()))
+    return sources
+
+
+def example_lcov(command, out, args):
+    """A supported same-profile report export restricted to established example sources, without another test run."""
+    before = args[:args.index('--')] if '--' in args else args
+    flags = {arg.split('=', 1)[0] for arg in before}
+    if flags & {'--dep-coverage', '--no-default-ignore-filename-regex', '--disable-default-ignore-filename-regex'}:
+        return 0
+    sources = example_sources(command[3:])
+    if not sources:
+        return 0
+    raw = out.with_suffix('.examples.lcov')
+    raw.unlink(missing_ok=True)
+    _, options, _, _ = example_options(command[3:])
+    export = ['cargo', 'llvm-cov', 'report', '--lcov', '--no-default-ignore-filename-regex',
+              '--output-path', str(raw), *options]
+    print(shlex.join(export), flush=True)
+    code = subprocess.run(export).returncode
+    if code:
+        return code
+    kept, keep = [], False
+    for line in raw.read_text().splitlines(keepends=True):
+        if line.startswith('SF:'):
+            path = Path(line[3:].strip())
+            keep = str(path.resolve() if path.is_absolute() else path) in sources
+        if keep:
+            kept.append(line)
+        if line.strip() == 'end_of_record':
+            keep = False
+    out.write_text(merge_lcov([out.read_text(), ''.join(kept)]))
+    return 0
+
+
 def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
@@ -451,6 +662,12 @@ def run_tests(step, args):
         command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
         code = subprocess.run(command).returncode
+        if not code:
+            try:
+                code = example_lcov(command, parts[-1], args)
+            except SystemExit as error:
+                print(error, file=sys.stderr, flush=True)
+                code = 1
         if code:
             pending_run(step).unlink(missing_ok=True)
             return code
@@ -503,10 +720,11 @@ def test_file(path):
 
 
 def unreported(changed, lines, excluded):
-    """The files of CHANGED that are not in the report, not excluded and not test files: no test can cover them.
+    """The files of CHANGED that are not in the report, not excluded and not test files.
 
     cargo llvm-cov leaves out a file that no test target compiles, such as a file that no mod names or a file in
-    examples. It also leaves out each file in a folder named tests, examples or benches, at any depth.
+    examples. Reporting scope or copied source paths can also omit a file that runs. Absence alone does not
+    prove that no test runs the file.
     """
     return [path for path in changed if path not in lines and not excluded(path) and not test_file(path)]
 
@@ -567,15 +785,15 @@ def coverage():
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
     for path in missing:
-        print(f'{path}: a changed file that is not in the coverage report, so no test runs it')
+        print(f'{path}: a changed file that is absent from the coverage report')
     if missing:
-        print('coverage-check: no test target compiles these files, or cargo llvm-cov leaves out their folder. Call '
-              'the code from a test, move it out of a folder named tests or examples, or exclude the file',
+        print('coverage-check: inspect test targets, reporting scope or copied source paths; absence does not prove '
+              'that no test runs a file. Add coverage or seek independent review under the Rust test-review rules',
               file=sys.stderr)
         code = code or 1
     if code:
-        print('coverage-check: write tests for the missing lines. A file that no test can run goes in '
-              f'{COVERAGE_EXCLUDE}, in a commit of its own before this one', file=sys.stderr)
+        print('coverage-check: write tests for missing lines. Any permitted exclusion needs independent review and '
+              f'a separate prior commit in {COVERAGE_EXCLUDE}; see the Rust test-review rules', file=sys.stderr)
     return code
 
 
