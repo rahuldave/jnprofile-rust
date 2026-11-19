@@ -69,6 +69,18 @@ On the first commit of a repository, `diff-cover` has no parent to compare with.
 
 The report of `integration` counts only when `integration` is in the steps of `just check`. The installer of jnterfaces writes those steps into the key `steps` of `.agents/stack.json`. The setup answer that runs `integration` only in `just verify` takes it out of that list. Then a line that only an integration test runs fails `coverage-check`. Give it a unit test, or exclude its file. With no `.agents/stack.json`, the report counts, as the spec says by default.
 
+For changed-line coordinates, the profile uses its existing worktree-tree helper to build a fresh eligible
+coverage snapshot. It reads that tree into an owned temporary Git index for `diff-cover` alone. Git then supplies
+one staged diff against HEAD in final source coordinates, including readable untracked source. The real index
+stays unchanged. Failure to build or read the snapshot fails the check.
+
+Only `diff-cover` runs from the Git repository root, with the absolute report path and exclusion patterns.
+Running from the repository root keeps absolute LCOV paths correct for projects in subdirectories. Project lists, source-presence checks
+and freshness checks still use the project folder.
+
+The coverage snapshot skips only the exact unreadable untracked paths already excluded from `diff-cover`.
+These paths add no source exemption. Report freshness keeps its existing full-tree checks and their failure rules.
+
 `diff-cover` counts only the files that are in the report. The default `cargo llvm-cov` report leaves out files that no test target compiles and files in folders named `tests`, `examples` or `benches`, at any depth.
 
 The profile supplements that report with measured, Git-owned workspace example sources, including their modules and custom example entrypoints. Dependency sources and Cargo output directories stay outside the supplement, as do test and bench sources. Custom-path helper modules outside example folders keep the default reporting scope.

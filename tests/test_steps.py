@@ -650,7 +650,7 @@ class Repository(unittest.TestCase):
         with self.diff_cover() as calls, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(steps.coverage(), 0)
         diff_cover, = calls
-        self.assertEqual(diff_cover[diff_cover.index('diff-cover') + 1], str(steps.WORK / 'lcov.info'))
+        self.assertEqual(diff_cover[diff_cover.index('diff-cover') + 1], str((steps.WORK / 'lcov.info').resolve()))
         self.assertNotIn('integration', ' '.join(diff_cover))
 
     def gate(self):
@@ -658,6 +658,160 @@ class Repository(unittest.TestCase):
         done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
                               cwd=self.root, capture_output=True, text=True)
         return done.returncode, done.stdout + done.stderr
+
+    def test_partially_staged_insertion_uses_final_coordinates_without_changing_the_index(self):
+        self.commit_one()
+        source = self.root / 'src/lib.rs'
+        source.write_text('covered original\nmissed original\n')
+        self.git('add', 'src/lib.rs')
+        source.write_text('covered prefix one\ncovered prefix two\ncovered original\nmissed original\n')
+        self.write_reports([('src/lib.rs', line, int(line != 4)) for line in range(1, 5)], [])
+        index = Path(subprocess.check_output(['git', 'rev-parse', '--git-path', 'index'], cwd=self.root,
+                                            text=True).strip())
+        before = index.read_bytes()
+        code, out = self.gate()
+        self.assertEqual(index.read_bytes(), before)
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 4', out)
+
+    def test_partially_staged_deletion_uses_final_coordinates(self):
+        self.commit_one()
+        source = self.root / 'src/lib.rs'
+        source.write_text('removed one\nremoved two\ncovered original\nmissed original\n')
+        self.git('add', 'src/lib.rs')
+        source.write_text('covered original\nmissed original\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 2', out)
+
+    def test_final_coordinates_include_renamed_sources_with_path_metacharacters(self):
+        self.commit_one()
+        (self.root / 'src/lib.rs').write_text('keep\nold\n')
+        self.git('add', 'src/lib.rs')
+        self.git('commit', '-q', '-m', 'base source')
+        path = 'src/renamed [x]*?.rs'
+        self.git('mv', 'src/lib.rs', path)
+        source = self.root / path
+        source.write_text('keep\nmissed new\n')
+        self.git('add', '--', path)
+        source.write_text('covered prefix one\ncovered prefix two\nkeep\nmissed new\n')
+        self.write_reports([(path, line, int(line != 4)) for line in range(1, 5)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 4', out)
+
+    def test_deleted_source_is_not_required_by_the_final_snapshot(self):
+        self.commit_one()
+        (self.root / 'src/lib.rs').write_text('old\n')
+        self.git('add', 'src/lib.rs')
+        self.git('commit', '-q', '-m', 'base source')
+        self.git('rm', 'src/lib.rs')
+        self.write_reports([], [])
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+
+    def test_final_coordinates_in_a_subdirectory_project(self):
+        self.commit_one()
+        self.files('rs/src/lib.rs')
+        (self.root / 'src/lib.rs').write_text('outside covered\n')
+        source = self.root / 'rs/src/lib.rs'
+        source.write_text('covered original\nmissed original\n')
+        self.git('add', 'rs/src/lib.rs')
+        source.write_text('prefix one\nprefix two\ncovered original\nmissed original\n')
+        os.chdir(self.root / 'rs')
+        rows = [('rs/src/lib.rs', line, int(line != 4)) for line in range(1, 5)]
+        self.write_reports([*rows, ('src/lib.rs', 1, 1)], [])
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('rs/src/lib.rs', done.stdout)
+        self.assertIn('src/lib.rs (100%)', done.stdout)
+        self.assertIn('Missing lines 4', done.stdout)
+        self.write_reports([*rows, ('src/lib.rs', 1, 0)], [])
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('src/lib.rs (0.0%): Missing lines 1', done.stdout)
+        self.assertEqual(Path.cwd(), self.root / 'rs')
+
+    def test_coverage_rebuilds_its_snapshot_and_preserves_index_on_diff_cover_errors(self):
+        self.commit_one()
+        source = self.root / 'src/lib.rs'
+        source.write_text('staged\n')
+        self.git('add', 'src/lib.rs')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        index = Path(subprocess.check_output(['git', 'rev-parse', '--git-path', 'index'], text=True).strip())
+        before = index.read_bytes()
+        real, indexes = subprocess.run, []
+
+        def run(command, *args, **kwargs):
+            if 'diff-cover' in command:
+                env = kwargs['env']
+                own = Path(env['GIT_INDEX_FILE'])
+                indexes.append(own)
+                self.assertNotEqual(own, index)
+                actual = real(['git', 'show', ':src/lib.rs'], env=env, capture_output=True, text=True)
+                self.assertEqual(actual.stdout, source.read_text())
+                raise OSError('deliberate diff-cover launch failure')
+            return real(command, *args, **kwargs)
+        with mock.patch.object(steps.subprocess, 'run', side_effect=run):
+            for text in ('first final\n', 'second final\n'):
+                source.write_text(text)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(steps.coverage(), 1)
+                self.assertEqual(index.read_bytes(), before)
+                self.assertFalse(indexes[-1].exists())
+        self.assertNotEqual(indexes[0], indexes[1])
+
+    def test_snapshot_failure_stops_before_diff_cover_and_preserves_the_index(self):
+        self.commit_one()
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        index = Path(subprocess.check_output(['git', 'rev-parse', '--git-path', 'index'], text=True).strip())
+        before = index.read_bytes()
+        with mock.patch.object(steps, 'worktree_tree', return_value=None), self.diff_cover() as calls:
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(steps.coverage(), 1)
+        self.assertEqual(calls, [])
+        self.assertIn('cannot establish', err.getvalue())
+        self.assertEqual(index.read_bytes(), before)
+
+    def test_unreadable_snapshot_tree_fails_closed_and_cleans_its_temporary_index(self):
+        self.commit_one()
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        index = Path(subprocess.check_output(['git', 'rev-parse', '--git-path', 'index'], text=True).strip())
+        before = index.read_bytes()
+        with mock.patch.object(steps, 'worktree_tree', return_value='0' * 40), self.diff_cover() as calls:
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(steps.coverage(), 1)
+        self.assertEqual(calls, [])
+        self.assertIn('cannot check the eligible worktree snapshot', err.getvalue())
+        self.assertEqual(index.read_bytes(), before)
+        self.assertEqual(list(steps.WORK.glob('diff-cover-*')), [])
+
+    def test_coverage_snapshot_skips_exactly_the_existing_unreadable_paths(self):
+        self.commit_one()
+        self.untracked_links()
+        self.files('src/new.rs', 'src/a-neighbor.rs')
+        self.write_reports([('src/new.rs', 1, 1), ('src/a-neighbor.rs', 1, 1)], [])
+        skipped = steps.unreadable_untracked()
+        original = steps.worktree_tree
+        real = subprocess.run
+
+        def run(command, *args, **kwargs):
+            if 'diff-cover' in command:
+                self.assertEqual(command[command.index('--exclude') + 1:], steps.exclude_patterns(skipped))
+                names = real(['git', 'ls-files', '-z'], env=kwargs['env'], capture_output=True,
+                             text=True).stdout.split('\0')
+                self.assertIn('src/new.rs', names)
+                self.assertIn('src/a-neighbor.rs', names)
+                self.assertFalse(set(skipped) & set(names))
+                return subprocess.CompletedProcess(command, 0)
+            return real(command, *args, **kwargs)
+        with mock.patch.object(steps, 'worktree_tree', wraps=original) as snapshot:
+            with mock.patch.object(steps.subprocess, 'run', side_effect=run):
+                self.assertEqual(steps.coverage(), 0)
+            snapshot.assert_called_once_with(skipped)
 
     def test_a_line_that_one_report_misses_and_the_other_does_not_measure_still_fails(self):
         """The code of cfg(not(test)) is in the build of integration only, and that of cfg(test) in test only."""
