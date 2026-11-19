@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -426,6 +427,111 @@ class Repository(unittest.TestCase):
         self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [('src/lib.rs', 2, 1), ('src/lib.rs', 3, 1)])
         code, out = self.gate()
         self.assertEqual(code, 0, out)
+
+    def untracked_links(self):
+        """Add the untracked paths that diff-cover cannot open: links to folders, a broken link, a nested repo."""
+        (self.root / '.agents/skills/rust-profile').mkdir(parents=True)
+        (self.root / '.agents/skills/rust-profile/SKILL.md').write_text('a\n')
+        (self.root / '.claude/skills').mkdir(parents=True)
+        (self.root / '.claude/skills/rust-profile').symlink_to('../../.agents/skills/rust-profile')
+        (self.root / 'src/[a]*?').symlink_to('../.agents')
+        (self.root / 'gone').symlink_to('nowhere')
+        (self.root / 'nested').mkdir()
+        subprocess.run(['git', 'init', '-q'], cwd=self.root / 'nested', check=True)
+        (self.root / 'nested/x').write_text('x\n')
+        subprocess.run(['git', 'add', 'x'], cwd=self.root / 'nested', check=True)
+
+    def test_an_untracked_link_to_a_folder_does_not_stop_diff_cover(self):
+        """The jnterfaces installer links .claude/skills/rust-profile to a folder, before anything is staged."""
+        self.commit_one()
+        self.untracked_links()
+        (self.root / 'src/lib.rs').write_text('a\nb\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('Error', out)
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 2', out)
+
+    def test_an_untracked_file_still_counts_next_to_an_untracked_link(self):
+        self.commit_one()
+        self.untracked_links()
+        (self.root / 'src/new.rs').write_text('a\nb\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/new.rs', 1, 1), ('src/new.rs', 2, 0)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('src/new.rs', out)
+        self.assertIn('Missing lines 2', out)
+
+    def test_only_the_untracked_paths_that_are_not_files_are_skipped(self):
+        self.commit_one()
+        self.untracked_links()
+        (self.root / 'src/new.rs').write_text('a\n')
+        skipped = steps.unreadable_untracked()
+        self.assertEqual(skipped, ['.claude/skills/rust-profile', 'gone', 'nested/', 'src/[a]*?'])
+        root = os.path.abspath('.')
+        self.assertEqual(steps.exclude_patterns(skipped),
+                         [f'{root}/.claude/skills/rust-profile', f'{root}/gone', f'{root}/nested',
+                          f'{root}/src/[[]a][*][?]'])
+        shutil.rmtree(self.root / 'nested')
+        self.git('add', '-A')
+        self.assertEqual(steps.unreadable_untracked(), [])
+
+    def test_a_link_to_a_folder_with_a_carriage_return_does_not_stop_diff_cover(self):
+        """text=True turned a carriage return into a newline, so the pattern named another path."""
+        self.commit_one()
+        (self.root / 'd').mkdir()
+        (self.root / 'src/x\r').symlink_to('../d')
+        (self.root / 'src/lib.rs').write_text('a\n')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('Error', out)
+
+    def test_a_link_with_a_backslash_stops_the_check_and_does_not_hide_a_real_file(self):
+        """diff-cover reads src\\lib.rs as src/lib.rs, so a pattern that skips the link skips the real file too."""
+        self.commit_one()
+        (self.root / 'd').mkdir()
+        (self.root / 'src/lib.rs').write_text('a\nb\n')
+        self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [])
+        for name in ('src\\lib.rs', 'x\\..\\zz'):
+            link = self.root / name
+            link.symlink_to('d' if name.startswith('src') else 'nowhere')
+            code, out = self.gate()
+            self.assertEqual(code, 1, out)
+            self.assertIn(f'{name}: an untracked path that is not a file, and its name holds a \\', out)
+            self.assertIn('Rename them', out)
+            self.assertNotIn('Error', out)
+            link.unlink()
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('Missing lines 2', out)
+
+    def test_an_untracked_name_that_is_not_utf_8_is_read(self):
+        """Linux allows such a name. git gives its bytes, and the pattern keeps them as the file system does."""
+        real = subprocess.run
+
+        def run(command, *args, **kwargs):
+            if command[:2] == ['git', 'ls-files']:
+                self.assertNotIn('text', kwargs)
+                return subprocess.CompletedProcess(command, 0, b'notes/caf\xe9\0gone\0', b'')
+            return real(command, *args, **kwargs)
+        with mock.patch.object(steps.subprocess, 'run', side_effect=run):
+            patterns = steps.unreadable_untracked()
+        self.assertEqual(patterns, ['gone', os.fsdecode(b'notes/caf\xe9')])
+        root = os.path.abspath('.')
+        self.assertEqual([os.fsencode(p) for p in steps.exclude_patterns(patterns)],
+                         [os.fsencode(root) + b'/gone', os.fsencode(root) + b'/notes/caf\xe9'])
+
+    def test_with_no_untracked_link_diff_cover_gets_no_exclude(self):
+        self.commit_one()
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        with self.diff_cover() as calls, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.coverage(), 0)
+        diff_cover, = calls
+        self.assertNotIn('--exclude', diff_cover)
 
     def test_the_merged_report_leaves_out_the_generated_files_of_the_parent(self):
         self.commit_one()
