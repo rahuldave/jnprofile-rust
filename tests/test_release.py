@@ -14,8 +14,8 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / 'scripts' / 'release_tag.py'
 WORKFLOW = ROOT / '.github' / 'workflows' / 'verify.yml'
-# The Git blob of release_tag.py at the commit 799a44b of agent_gest_git_skills. A change of the copy comes from there.
-UPSTREAM_BLOB = 'f014570e60c3ef9a7d2828cdd3e87f7d5e1f7047'
+# The Git blob of release_tag.py at the commit fbf0837 of agent_gest_git_skills. A change of the copy comes from there.
+UPSTREAM_BLOB = '28294abb7175e6ee90970ed2e136536a18daca50'
 # A git hook sets these for the repository of the hook, and the scratch repository must not use them.
 HOOK_VARIABLES = ('GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_OBJECT_DIRECTORY')
 # Git with no config of the user, such as a signing key, and a fixed author.
@@ -85,7 +85,7 @@ class WorkflowTest(unittest.TestCase):
 class CopyTest(unittest.TestCase):
     def test_the_script_is_the_copy_of_upstream(self):
         blob = run(['git', 'hash-object', str(SCRIPT)], ROOT).stdout.strip()
-        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills 799a44b')
+        self.assertEqual(blob, UPSTREAM_BLOB, 'scripts/release_tag.py differs from agent_gest_git_skills fbf0837')
 
 
 class HookTest(unittest.TestCase):
@@ -131,6 +131,15 @@ class ScriptTest(unittest.TestCase):
         self.commit('feat: a feature')
         self.assertIn('tagged v0.2.0', self.script().stdout)
         self.assertEqual(self.remote_tags(), ['v0.1.0', 'v0.1.1', 'v0.2.0'])
+
+    def test_a_labelled_bullet_in_the_body_asks_for_no_release(self):
+        """A bullet such as "- Removed: x" is not a commit. Only a bullet of a known lower-case type counts."""
+        self.commit('feat: start')
+        self.script()
+        self.commit('chore: tidy\n\n- Removed: the old copies\n- Fixed: a word\n* Feat: not a type')
+        self.assertIn('no release', self.script('--check').stdout)
+        self.commit('chore: squash\n\n* fix(api): a bug')
+        self.assertIn('the next tag is v0.1.1', self.script('--check').stdout)
 
 
 if __name__ == '__main__':
