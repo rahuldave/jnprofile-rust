@@ -63,12 +63,50 @@ class WorkflowTest(unittest.TestCase):
         self.flow = workflow()
         self.jobs = self.flow['jobs']
 
-    def test_only_the_job_release_can_write(self):
+    def test_only_the_jobs_release_and_docs_can_write(self):
         self.assertEqual(self.flow['permissions'], {'contents': 'read'})
         for name, job in self.jobs.items():
-            if name != 'release':
+            if name not in ('release', 'docs'):
                 self.assertNotEqual(job.get('permissions', {}).get('contents'), 'write', name)
         self.assertEqual(self.jobs['release']['permissions'], {'contents': 'write'})
+        self.assertEqual(self.jobs['docs']['permissions'], {'contents': 'write'})
+
+    def test_docs_publishes_the_site_after_verify_on_main(self):
+        """The site is built from each push to main, so gh-pages does not fall behind the docs."""
+        job = self.jobs['docs']
+        self.assertEqual(job['needs'], 'verify')
+        self.assertIn("github.event_name == 'push'", job['if'])
+        self.assertIn("github.ref == 'refs/heads/main'", job['if'])
+        last = job['steps'][-1]
+        self.assertEqual(last['run'].splitlines()[-1], 'just docs-publish')
+        self.assertEqual(last['shell'], 'bash')
+        names = ' '.join(step.get('run', '') for step in job['steps'])
+        self.assertIn('git config user.name', names)
+        self.assertIn('git config user.email', names)
+        self.assertEqual(job['concurrency']['group'], 'docs')
+
+    def test_docs_publishes_the_tip_of_main_from_an_older_commit(self):
+        """An older run that ends last, or that cancels a newer one, still publishes the newest site."""
+        script = self.jobs['docs']['steps'][-1]['run']
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            remote, repo, bin_dir = base / 'remote.git', base / 'repo', base / 'bin'
+            run(['git', 'init', '-q', '--bare', '-b', 'main', str(remote)], base)
+            run(['git', 'clone', '-q', str(remote), str(repo)], base)
+            run(['git', 'commit', '-q', '--allow-empty', '-m', 'a'], repo)
+            run(['git', 'push', '-q', 'origin', 'HEAD:main'], repo)
+            bin_dir.mkdir()
+            (bin_dir / 'just').write_text('#!/bin/sh\necho "just $* at $(git rev-parse HEAD)"\n')
+            (bin_dir / 'just').chmod(0o755)
+            env = {**GIT_ENV, 'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'}
+            old = run(['git', 'rev-parse', 'HEAD'], repo).stdout.strip()
+            run(['git', 'commit', '-q', '--allow-empty', '-m', 'b'], repo)
+            run(['git', 'push', '-q', 'origin', 'HEAD:main'], repo)
+            tip = run(['git', 'rev-parse', 'HEAD'], repo).stdout.strip()
+            run(['git', 'checkout', '-q', '--detach', old], repo)
+            out = subprocess.run(['bash', '-e', '-c', script], cwd=repo, env=env, capture_output=True, text=True,
+                                 check=True).stdout
+            self.assertIn(f'just docs-publish at {tip}', out)
 
     def test_release_runs_after_verify_on_main(self):
         job = self.jobs['release']
