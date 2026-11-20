@@ -5,8 +5,8 @@ The recipes in this folder run it with uv: python steps.py run STEP ARG..., fres
 PATH... and toml. STEP is test or integration. test runs the unit tests, those of the library and the binaries, and
 integration runs the test targets, such as the files of the folder tests. Each writes its own coverage report. The
 run ID JLOG_RUN of the root Justfile and the worktree tree tie each report to its run, so that coverage-check reads a
-report only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also needs
-diff-cover, which it runs with uv.
+report only in the same run. It needs Python 3.11 or later. The recipes pin the tree-sitter runtime and Rust
+grammar for declaration classification. coverage-check also runs pinned diff-cover with uv.
 
 The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through git show
 HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent without the file, the list is empty.
@@ -502,13 +502,40 @@ def test_file(path):
     return len(parts) > 1 and parts[0] in ('tests', 'benches')
 
 
-def unreported(changed, lines, excluded):
-    """The files of CHANGED that are not in the report, not excluded and not test files: no test can cover them.
+def declaration_category(path):
+    """Load the shipped parser helper by path, without changing unrelated commands' imports."""
+    try:
+        spec = importlib.util.spec_from_file_location('jnprofile_rust_declarations',
+                                                     Path(__file__).with_name('declarations.py'))
+        module = importlib.util.module_from_spec(spec)
+        bytecode = sys.dont_write_bytecode
+        try:
+            sys.dont_write_bytecode = True
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = bytecode
+        return module.classify(path)
+    except Exception as exc:
+        return None, f'Rust declaration helper unavailable or failed: {exc}'
 
-    cargo llvm-cov leaves out a file that no test target compiles, such as a file that no mod names or a file in
-    examples. It also leaves out each file in a folder named tests, examples or benches, at any depth.
+
+def unreported(changed, lines, excluded):
+    """Changed files absent from LCOV that do not qualify for a syntax-only declaration category.
+
+    Absence may reflect an uncompiled file or reporting scope. Keep that failure
+    unless the whole current source passes the positive declaration check.
     """
-    return [path for path in changed if path not in lines and not excluded(path) and not test_file(path)]
+    missing = []
+    for path in changed:
+        if path in lines or excluded(path) or test_file(path):
+            continue
+        category, reason = declaration_category(path)
+        if category:
+            print(f'{path}: absent from LCOV; {category} (syntax classification, not executable coverage)')
+        else:
+            print(f'{path}: declaration classification did not qualify: {reason}')
+            missing.append(path)
+    return missing
 
 
 def missed_lines(text, root):
@@ -567,15 +594,15 @@ def coverage():
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
     for path in missing:
-        print(f'{path}: a changed file that is not in the coverage report, so no test runs it')
+        print(f'{path}: a changed file that is absent from the coverage report')
     if missing:
-        print('coverage-check: no test target compiles these files, or cargo llvm-cov leaves out their folder. Call '
-              'the code from a test, move it out of a folder named tests or examples, or exclude the file',
+        print('coverage-check: inspect test targets, reporting scope or copied source paths; absence does not prove '
+              'that no test runs a file. Add coverage or seek independent review under the Rust test-review rules',
               file=sys.stderr)
         code = code or 1
     if code:
-        print('coverage-check: write tests for the missing lines. A file that no test can run goes in '
-              f'{COVERAGE_EXCLUDE}, in a commit of its own before this one', file=sys.stderr)
+        print('coverage-check: write tests for missing lines. Any permitted exclusion needs independent review and '
+              f'a separate prior commit in {COVERAGE_EXCLUDE}; see the Rust test-review rules', file=sys.stderr)
     return code
 
 

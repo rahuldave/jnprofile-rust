@@ -367,6 +367,19 @@ class RustLab(unittest.TestCase):
         """The output and the error output of a finished process, as one text."""
         return done.stdout + done.stderr
 
+    def test_installed_parser_accepts_declarations_and_retains_runtime_files(self):
+        payload = self.dir / '.agents/just/rust'
+        self.assertTrue((payload / 'declarations.py').is_file())
+        recipe = (payload / 'base.just').read_text().split('rust_py := "', 1)[1].split('"', 1)[0]
+        command = shlex.split(recipe)
+        (self.dir / 'src/declaration.rs').write_text('use clap::Args; #[derive(Args)] pub struct A;')
+        (self.dir / 'src/orphan.rs').write_text('pub fn unwired() {}')
+        probe = ('import sys; sys.path.insert(0, ' + repr(str(payload)) + '); import declarations; '
+                 'assert declarations.classify("src/declaration.rs")[0] == "known Clap declarations"; '
+                 'assert declarations.classify("src/orphan.rs")[0] is None')
+        done = run([*command, '-I', '-c', probe], self.dir)
+        self.assertEqual(done.returncode, 0, self.out(done))
+
     def test_the_installer_finds_the_profile_by_cargo_toml_and_writes_its_files(self):
         self.assertIn('Profile(s) found from the files of the project: rust', self.installed.stderr)
         saved = json.loads((self.app / '.agents/stack.json').read_text())
