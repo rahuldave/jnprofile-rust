@@ -37,6 +37,9 @@ These rules add to the base task for the Rust tests of the change.
   derives and handwritten executable bodies must retain the missing-file failure. Require current-run
   successful compiler dependencies and a plain module path from the compiled crate root. Unmounted files,
   conditional module paths, data-only inputs and stale evidence must retain the failure.
+  The known Serde and getset derives permit only the documented default marker and public getter helper,
+  bound to the same struct. Require behavior tests for serialization, defaults and getters; configured
+  callbacks and unknown helper forms retain the missing-file failure.
 
 ## Recommendations
 

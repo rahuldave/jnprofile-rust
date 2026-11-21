@@ -81,6 +81,8 @@ A pre-existing compiler wrapper still runs, but cannot supply module evidence be
 
 Known Clap derives (`Args`, `Subcommand`, `ValueEnum`, `Parser`) and built-in derives may qualify. The check resolves explicit Clap imports and rejects shadowed or unknown derives. Known helper attributes accept literals, named paths, literal lists and ranges; calls, closures, blocks and macros fail. A named parser callback keeps its own coverage obligation in its source file. Generated parser behavior still needs tests and macro review.
 
+The known derives also include `serde::Deserialize`, `serde::Serialize` and `getset::Getters`, with unambiguous explicit imports or aliases. `#[serde(default)]` qualifies only on a struct with the known Deserialize derive; `#[get = "pub"]` qualifies only on a field of a struct with the known Getters derive. Other Serde and getset helpers, including configured callbacks, retain the failure. On an enum, the exact inert lint attribute `#[allow(clippy::enum_variant_names)]` qualifies. Unknown, shadowed or ambiguous names retain the failure, and generated serialization and getter behavior still needs tests.
+
 LLVM counts the code of a `macro_rules!` macro at the line that calls the macro. So a branch of a macro that no test runs does not fail `coverage-check`, and the `test-review` target checks it.
 
 ## The run ID
