@@ -2,7 +2,7 @@
 
 The pinned tree-sitter runtime and Rust grammar parse the whole source, including
 attribute values parsed as Rust expressions. Unknown syntax fails closed. This
-category includes known Clap generated parsers; it does not measure their coverage.
+category includes known derive forms; it does not measure generated behavior.
 """
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from pathlib import Path
 RUNTIME = 'tree-sitter==0.25.2'
 GRAMMAR = 'tree-sitter-rust==0.24.0'
 CLAP = {'Args', 'Subcommand', 'ValueEnum', 'Parser'}
+KNOWN = {'clap::' + name for name in CLAP} | {'serde::Deserialize', 'serde::Serialize', 'getset::Getters'}
 BUILTIN = {'Clone', 'Copy', 'Debug', 'Default', 'Eq', 'PartialEq', 'Ord', 'PartialOrd', 'Hash'}
 # These helpers accept only literals, paths, literal lists and literal ranges.
 HELPERS = {
@@ -97,19 +98,27 @@ def classify(path):
                 name = n.child_by_field_name('name')
                 if name:
                     bindings.setdefault(text(name), []).append('<local>')
-        has_clap = False
-
         def derive_name(name):
-            nonlocal has_clap
-            if name.startswith('clap::') and name[6:] in CLAP and 'clap' not in bindings and '*' not in bindings:
-                has_clap = True
-                return True
+            """Resolve only known derive paths with no ambiguous or shadowed binding."""
+            if '*' in bindings:
+                return None
+            if name in KNOWN and name.split('::')[0] not in bindings:
+                return name
             targets = bindings.get(name, [])
-            if (len(targets) == 1 and targets[0] in {'clap::' + c for c in CLAP}
-                    and '*' not in bindings and 'clap' not in bindings):
-                has_clap = True
-                return True
-            return name in BUILTIN and not targets and '*' not in bindings
+            if len(targets) == 1 and targets[0] in KNOWN and targets[0].split('::')[0] not in bindings:
+                return targets[0]
+            return name if name in BUILTIN and not targets else None
+
+        def owner(item):
+            """Find the declaration governed by a sibling attribute, ignoring comments."""
+            sibling = item.next_named_sibling
+            while sibling is not None and sibling.type in {'attribute_item', 'line_comment', 'block_comment'}:
+                sibling = sibling.next_named_sibling
+            return sibling
+
+        def identity(node):
+            """Use source coordinates to associate separately visited parser nodes."""
+            return (node.start_byte, node.end_byte) if node is not None else None
 
         def arguments(attr):
             args = attr.child_by_field_name('arguments')
@@ -133,19 +142,44 @@ def classify(path):
             return False
 
         attrs = [n for n in nodes if n.type in {'attribute_item', 'inner_attribute_item'}]
+        derives = {}
         # Resolve derives first, so helper attributes cannot introduce an unknown macro.
         for item in attrs:
             attr = item.named_children[0]
             name = text(attr.named_children[0])
             if name == 'derive':
                 args = arguments(attr)
-                if not args or not all(n.type in PATHS and derive_name(text(n)) for n in args):
+                resolved = [derive_name(text(n)) if n.type in PATHS else None for n in args] if args else []
+                if not resolved or not all(resolved):
                     return None, 'unknown or shadowed derive'
+                derives.setdefault(identity(owner(item)), set()).update(resolved)
+        has_clap = any(name.startswith('clap::') for names in derives.values() for name in names)
         for item in attrs:
             attr = item.named_children[0]
             name = text(attr.named_children[0])
             if name == 'derive':
                 continue
+            target = owner(item)
+            names = derives.get(identity(target), set())
+            if name == 'serde' and target is not None and target.type == 'struct_item':
+                args = arguments(attr)
+                if ('serde::Deserialize' in names and 'serde' not in bindings and '*' not in bindings
+                        and args is not None and len(args) == 1
+                        and args[0].type == 'identifier' and text(args[0]) == 'default'):
+                    continue
+            if name == 'get' and target is not None and target.type == 'field_declaration':
+                enclosing = target.parent.parent
+                value = attr.child_by_field_name('value')
+                if (enclosing.type == 'struct_item'
+                        and 'getset::Getters' in derives.get(identity(enclosing), set())
+                        and 'get' not in bindings and '*' not in bindings
+                        and value is not None and value.type == 'string_literal' and text(value) == '"pub"'):
+                    continue
+            if name == 'allow' and target is not None and target.type == 'enum_item':
+                args = arguments(attr)
+                if (not ({'allow', 'clippy', '*'} & bindings.keys()) and args is not None and len(args) == 1
+                        and args[0].type == 'scoped_identifier' and text(args[0]) == 'clippy::enum_variant_names'):
+                    continue
             if name == 'doc':
                 value = attr.child_by_field_name('value')
                 if value is not None and value.type in {'string_literal', 'raw_string_literal'}:
@@ -176,6 +210,9 @@ def classify(path):
         if not structural(root):
             return None, 'handwritten runtime or unsupported syntax'
         substantive = [n for n in root.named_children if n.type not in {'line_comment', 'block_comment'}]
-        return ('known Clap declarations' if has_clap else 'declarations' if substantive else 'empty/comment-only'), ''
+        generated = any(name in KNOWN and not name.startswith('clap::') for names in derives.values() for name in names)
+        category = ('known Clap declarations' if has_clap else 'known derived declarations' if generated
+                    else 'declarations' if substantive else 'empty/comment-only')
+        return category, ''
     except Exception as exc:  # Parser/runtime failures must retain the absent-file finding.
         return None, f'Rust declaration parser unavailable or failed: {exc}'
