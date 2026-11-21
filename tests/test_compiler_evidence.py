@@ -42,6 +42,47 @@ class ModuleGraph(unittest.TestCase):
             (root / 'lib.rs').write_text('mod x;')
             self.assertNotIn(root / 'x.rs', evidence.module_sources(['rustc', str(root / 'lib.rs')]))
 
+    def test_exact_gossil_gest_values_registration(self):
+        # lib.rs:823-824 at c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90.
+        fixture = test_steps.REPO / 'tests/fixtures/declarations/cfg_test/gest_values_mod.rs'
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / 'gest_values').mkdir()
+            path = root / 'gest_values/mod.rs'
+            path.write_bytes(fixture.read_bytes())
+            (root / 'lib.rs').write_text('#[cfg(test)]\nmod gest_values;\n')
+            for flags, admitted in (([], False), (['--test'], True)):
+                with self.subTest(flags=flags):
+                    found = evidence.module_sources(['rustc', str(root / 'lib.rs'), *flags])
+                    self.assertEqual(path in found, admitted)
+                    if admitted:
+                        self.assertEqual(found[path], evidence.digest(path))
+
+    def test_cfg_test_edges_require_actual_test_flag_and_only_exact_attributes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / 'nested').mkdir()
+            (root / 'x.rs').write_text('pub struct X;')
+            (root / 'nested/child.rs').write_text('pub struct Child;')
+            (root / 'lib.rs').write_text('#[cfg(test)] mod x; '
+                                        '#[cfg(test)] mod nested { #[cfg(test)] mod child; }')
+            for flags, admitted in (([], False), (['--cfg', 'test'], False),
+                                    (['--test=false'], False), (['--test'], True)):
+                with self.subTest(flags=flags):
+                    found = evidence.module_sources(['rustc', str(root / 'lib.rs'), *flags])
+                    self.assertEqual(root / 'x.rs' in found, admitted)
+                    self.assertEqual(root / 'nested/child.rs' in found, admitted)
+            for source in ('#[cfg(test)] #[unknown] mod x;', '#[cfg(any(test))] mod x;',
+                           '#[cfg(test)] #[path="x.rs"] mod x;',
+                           '#[allow(unused_imports)] mod x;', '#[cfg(test, other)] mod x;',
+                           '#[cfg_attr(test, cfg(test))] mod x;',
+                           '#[cfg(test)] custom!(); mod other;',
+                           '#[cfg(test)] use other::X; #[unknown] mod x;'):
+                with self.subTest(source=source):
+                    (root / 'lib.rs').write_text(source)
+                    self.assertNotIn(root / 'x.rs', evidence.module_sources(
+                        ['rustc', str(root / 'lib.rs'), '--test']))
+
     def test_dependency_paths_with_spaces_and_data_inputs_remain_separate(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
@@ -60,20 +101,28 @@ class ModuleGraph(unittest.TestCase):
             evidence.depfile(['rustc', '--emit=dep-info', '--emit=link'])
 
     def test_wrapper_requires_new_successful_output_and_unchanged_module_source(self):
+        for test_flag in (False, True):
+            with self.subTest(test_flag=test_flag):
+                self.wrapper_controls(test_flag)
+
+    def wrapper_controls(self, test_flag):
+        source = ('#[cfg(test)] ' if test_flag else '') + 'mod yes; const X: &str = include_str!("data.rs");'
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
-            (root / 'lib.rs').write_text('mod yes; const X: &str = include_str!("data.rs");')
+            (root / 'lib.rs').write_text(source)
             (root / 'yes.rs').write_text('pub struct Yes;')
             (root / 'data.rs').write_text('pub struct Data;')
             receipt_dir = root / 'receipts'
             receipt_dir.mkdir()
             destination = root / 'fresh.d'
             args = ['wrapper', 'rustc', str(root / 'lib.rs'), '--emit=dep-info=' + str(destination)]
+            if test_flag:
+                args.append('--test')
             env = {'JNPROFILE_SOURCE_ROOT': str(root), 'JNPROFILE_COMPILER_EVIDENCE': str(receipt_dir),
                    'JNPROFILE_PRIOR_RUSTC_WRAPPER': '', 'RUSTC_WORKSPACE_WRAPPER': ''}
             for mode in ('success', 'failed', 'no-output', 'source-stale', 'ancestor-stale',
                          'cache-wrapper', 'workspace-wrapper'):
-                (root / 'lib.rs').write_text('mod yes; const X: &str = include_str!("data.rs");')
+                (root / 'lib.rs').write_text(source)
                 (root / 'yes.rs').write_text('pub struct Yes;')
                 env['JNPROFILE_PRIOR_RUSTC_WRAPPER'] = 'existing-wrapper' if mode == 'cache-wrapper' else ''
                 env['RUSTC_WORKSPACE_WRAPPER'] = 'existing-workspace-wrapper' if mode == 'workspace-wrapper' else ''

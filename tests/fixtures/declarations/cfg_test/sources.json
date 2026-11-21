@@ -1,0 +1,37 @@
+[
+  {
+    "path": "src/ui/components.rs",
+    "fixture": "ui_components.rs",
+    "sha256": "db189f3793c2769d811f908d51da682a34874d9ab14e82da63f92e636ece3f66",
+    "tree": "c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90",
+    "snapshot_present": true
+  },
+  {
+    "path": "src/ui/components/atoms.rs",
+    "fixture": "ui_components_atoms.rs",
+    "sha256": "889698403c381c232b46f7867d455f460f8d374a2703ff96fa1cae25b9569124",
+    "tree": "c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90",
+    "snapshot_present": true
+  },
+  {
+    "path": "src/ui/components/molecules.rs",
+    "fixture": "ui_components_molecules.rs",
+    "sha256": "b079fe0a09ac0f1b42ffad69933834dafd96616fba0da8578f083d86f9388065",
+    "tree": "c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90",
+    "snapshot_present": true
+  },
+  {
+    "path": "src/ui/components/views.rs",
+    "fixture": "ui_components_views.rs",
+    "sha256": "94262af93e8f863046768e14239c9c9b3693232c11085eca8307f71e2cbd7c95",
+    "tree": "c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90",
+    "snapshot_present": true
+  },
+  {
+    "path": "src/gest_values/mod.rs",
+    "fixture": "gest_values_mod.rs",
+    "sha256": "8707eab44bc18f1434509c69a415fb9c87f1beac0c3afeac147df705165c8fc7",
+    "tree": "c2a4776e57bb1030aa5ac7cef9648a6cb37f6b90",
+    "snapshot_present": false
+  }
+]

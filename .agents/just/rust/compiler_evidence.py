@@ -7,6 +7,7 @@ uses a cached dependency file as evidence that a module was compiled.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -56,7 +57,7 @@ def depfile(args):
 
 
 def module_sources(args, project=None):
-    """Follow only plain, unconditionally declared module edges from the crate root.
+    """Follow plain module edges and exact cfg(test) edges in test compiler calls.
 
     Compiler dependencies alone include include_str!/include_bytes! inputs. This
     independent positive module graph prevents those inputs from becoming proof.
@@ -86,14 +87,17 @@ def module_sources(args, project=None):
     def scope(node, directory):
         if any(child.type == 'inner_attribute_item' for child in node.named_children):
             return
-        attributed = False
+        attributes = []
         for child in node.named_children:
             if child.type in {'attribute_item', 'inner_attribute_item'}:
-                attributed = True
+                attributes.append(child)
                 continue
             if child.type in {'line_comment', 'block_comment'}:
                 continue
-            if child.type == 'mod_item' and not attributed:
+            test_edge = ('--test' in args and all(
+                re.fullmatch(rb'#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]', attr.text)
+                for attr in attributes))
+            if child.type == 'mod_item' and (not attributes or test_edge):
                 name = child.child_by_field_name('name').text.decode()
                 if not name.isidentifier():
                     continue
@@ -105,7 +109,7 @@ def module_sources(args, project=None):
                     existing = [candidate for candidate in candidates if candidate.is_file()]
                     if len(existing) == 1:
                         visit(existing[0].resolve(), directory / name)
-            attributed = False
+            attributes = []
 
     visit(roots[0], roots[0].parent)
     return found
