@@ -1,6 +1,8 @@
 """Parser failures and the installed Python runtime contract, without Cargo."""
 import contextlib
 import io
+import hashlib
+import json
 from pathlib import Path
 import shlex
 import shutil
@@ -23,6 +25,40 @@ class DeclarationParser(unittest.TestCase):
                                    ('gossil_block.rs', 'declarations')):
             with self.subTest(filename=filename):
                 self.assertEqual(declarations.classify(fixtures / filename), (expected, ''))
+
+    def test_exact_gossil_cfg_test_declarations(self):
+        fixtures = REPO / 'tests/fixtures/declarations/cfg_test'
+        sources = json.loads((fixtures / 'sources.json').read_text())
+        self.assertEqual(len(sources), 5)
+        for source in sources:
+            path = fixtures / source['fixture']
+            with self.subTest(path=path.name):
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), source['sha256'])
+                self.assertEqual(declarations.classify(path), ('declarations', ''))
+
+    def test_cfg_and_import_lint_syntax_remains_bounded(self):
+        refused = (
+            '#[cfg(other)] mod x;', '#[cfg(any(test))] mod x;',
+            '#[cfg_attr(test, allow(unused_imports))] use x::X;',
+            '#[cfg(test)] #[unknown] mod x;', '#[cfg(test)] fn f() {}',
+            '#[cfg(test)] mod x { fn f() {} }', '#[cfg(test)] custom!();',
+            '#[cfg(test)] mod x { custom!(); }', '#![cfg(test)] mod x;',
+            '#[allow(unused_imports)] mod x;', '#[allow(unused_imports, dead_code)] use x::X;',
+            '#[allow(unused_imports = callback())] use x::X;',
+            '#[cfg(test = callback())] mod x;',
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'input.rs'
+            for source in refused:
+                with self.subTest(source=source):
+                    path.write_text(source)
+                    self.assertIsNone(declarations.classify(path)[0])
+            for source in ('#[cfg(test)] pub use x::X;', '#[cfg(test)] mod x;',
+                           '#[cfg(test)] mod x { pub use super::X; }',
+                           '#[allow(unused_imports)] pub use x::X;'):
+                with self.subTest(source=source):
+                    path.write_text(source)
+                    self.assertEqual(declarations.classify(path), ('declarations', ''))
 
     def test_known_derives_and_helpers_resolve_explicit_unambiguous_imports(self):
         sources = [

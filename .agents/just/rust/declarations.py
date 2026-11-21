@@ -161,6 +161,15 @@ def classify(path):
                 continue
             target = owner(item)
             names = derives.get(identity(target), set())
+            if (item.type == 'attribute_item' and target is not None
+                    and ((name == 'cfg' and target.type in {'mod_item', 'use_declaration'})
+                         or (name == 'allow' and target.type == 'use_declaration'))):
+                args = arguments(attr)
+                expected = 'test' if name == 'cfg' else 'unused_imports'
+                if (name not in bindings and '*' not in bindings and args is not None
+                        and len(args) == 1 and args[0].type == 'identifier'
+                        and text(args[0]) == expected):
+                    continue
             if name == 'serde' and target is not None and target.type == 'struct_item':
                 args = arguments(attr)
                 if ('serde::Deserialize' in names and 'serde' not in bindings and '*' not in bindings
