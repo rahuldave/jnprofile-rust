@@ -15,6 +15,61 @@ import declarations
 
 
 class DeclarationParser(unittest.TestCase):
+    def test_actual_gossil_settings_and_markdown_declarations(self):
+        fixtures = REPO / 'tests/fixtures/declarations'
+        # Exact untracked working-tree snapshots at Gossil HEAD 146789901c95;
+        # sources.json records the failing guard, paths and digests.
+        for filename, expected in (('gossil_config.rs', 'known derived declarations'),
+                                   ('gossil_block.rs', 'declarations')):
+            with self.subTest(filename=filename):
+                self.assertEqual(declarations.classify(fixtures / filename), (expected, ''))
+
+    def test_known_derives_and_helpers_resolve_explicit_unambiguous_imports(self):
+        sources = [
+            'use serde::{Deserialize as D, Serialize as S}; use getset::Getters as G; '
+            '#[derive(D, S, G)] #[serde(default)] struct A { #[get="pub"] x: u8 }',
+            '#[derive(serde::Deserialize, getset::Getters)] #[serde(default)] '
+            'struct A { #[get="pub"] x: u8 }',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'input.rs'
+            for source in sources:
+                with self.subTest(source=source):
+                    path.write_text(source)
+                    self.assertEqual(declarations.classify(path)[0], 'known derived declarations')
+
+    def test_serde_getset_and_lint_extensions_keep_adversarial_forms_closed(self):
+        sources = [
+            'mod serde; #[derive(serde::Deserialize)] struct A;',
+            'use other::serde; #[derive(serde::Serialize)] struct A;',
+            'use other::getset; #[derive(getset::Getters)] struct A;',
+            'use serde::Deserialize as D; use other::D; #[derive(D)] struct A;',
+            'use getset::Getters as G; use other::G; #[derive(G)] struct A;',
+            'use other::*; #[derive(serde::Deserialize)] struct A;',
+            '#[derive(serde::Deserialize)] #[serde(default="callback")] struct A;',
+            '#[derive(serde::Deserialize)] #[serde(deserialize_with="callback")] struct A;',
+            '#[derive(serde::Deserialize)] #[serde(default=callback())] struct A;',
+            '#[derive(serde::Serialize)] #[serde(default)] struct A;',
+            '#[derive(serde::Deserialize)] struct A; #[serde(default)] struct B;',
+            '#[derive(getset::Getters)] struct A; struct B { #[get="pub"] x: u8 }',
+            '#[derive(getset::Getters)] struct A { #[get="pub(crate)"] x: u8 }',
+            '#[derive(getset::Getters)] struct A { #[get=callback()] x: u8 }',
+            'use other::get; #[derive(getset::Getters)] struct A { #[get="pub"] x: u8 }',
+            '#[allow(clippy::enum_variant_names, dead_code)] enum A { A }',
+            '#[allow(dead_code)] enum A { A }',
+            '#[allow(clippy::enum_variant_names = callback())] enum A { A }',
+            'use other::clippy; #[allow(clippy::enum_variant_names)] enum A { A }',
+            'use other::allow; #[allow(clippy::enum_variant_names)] enum A { A }',
+            '#[allow(clippy::enum_variant_names)] struct A;',
+            '#[derive(serde::Deserialize)] struct A; fn executable() {}',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'input.rs'
+            for source in sources:
+                with self.subTest(source=source):
+                    path.write_text(source)
+                    self.assertIsNone(declarations.classify(path)[0])
+
     def test_failures_and_invalid_utf8_fail_closed(self):
         import tree_sitter
         with tempfile.TemporaryDirectory() as folder:

@@ -409,6 +409,56 @@ class RustLab(unittest.TestCase):
                 else:
                     self.assertIn('src/candidate.rs', done.stdout)
 
+    def test_actual_gossil_derive_shapes_and_valid_unknown_helpers(self):
+        # Match the exact failing source rather than a declaration-shaped stand-in.
+        # Pins match Gossil's recorded failing Cargo.lock; no program is installed.
+        manifest = (self.dir / 'Cargo.toml').read_text()
+        (self.dir / 'Cargo.toml').write_text(manifest + '\n'
+            'serde = { version = "=1.0.229", features = ["derive"] }\n'
+            'getset = "=0.1.7"\npulldown-cmark = "=0.13.4"\nserde_json = "=1.0.154"\n')
+        done = self.just('setup')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        commit(self.dir, 'pin actual declaration fixture dependencies')
+        fixtures = REPO / 'tests/fixtures/declarations'
+        sources = {'src/ui/config.rs': (fixtures / 'gossil_config.rs').read_text(),
+                   'src/ui/markdown/block.rs': (fixtures / 'gossil_block.rs').read_text(),
+                   'src/ui.rs': 'pub mod config; pub mod markdown;\n',
+                   'src/ui/markdown.rs': 'pub mod block;\n',
+                   'src/ui/config/colors.rs': '#[derive(Clone, Debug, Default, serde::Deserialize, '
+                       'PartialEq, serde::Serialize)] pub struct Settings;\n'}
+        for path, source in sources.items():
+            target = self.dir / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source)
+        (self.dir / 'src/lib.rs').write_text(LIB + '\npub mod ui;\n')
+        (self.dir / 'tests/derived.rs').write_text('''#[test]
+fn settings_default_roundtrip_and_getter() {
+    let settings: app::ui::config::Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(settings, app::ui::config::Settings::default());
+    assert_eq!(settings.colors(), &app::ui::config::colors::Settings::default());
+    let encoded = serde_json::to_string(&settings).unwrap();
+    assert_eq!(serde_json::from_str::<app::ui::config::Settings>(&encoded).unwrap(), settings);
+}
+''')
+        done = self.just('coverage-check')
+        self.assertEqual(done.returncode, 0, self.out(done))
+        self.assertIn('src/ui/config.rs: absent from LCOV; known derived declarations', done.stdout)
+        self.assertIn('src/ui/markdown/block.rs: absent from LCOV; declarations', done.stdout)
+        # Both forms compile and keep the behavior test passing. The missing-file
+        # gate must still reject the unsupported source attribute itself.
+        for path, original, changed in (
+            ('src/ui/config.rs', '#[serde(default)]', '#[serde(default = "Default::default")]'),
+            ('src/ui/markdown/block.rs', '#[allow(clippy::enum_variant_names)]',
+             '#[allow(clippy::enum_variant_names, dead_code)]'),
+        ):
+            with self.subTest(path=path):
+                (self.dir / path).write_text(sources[path].replace(original, changed))
+                done = self.just('coverage-check')
+                self.assertNotEqual(done.returncode, 0, self.out(done))
+                self.assertIn(path + ': a changed file that is absent from the coverage report', done.stdout)
+                self.assertIn('unknown or executable attribute', done.stdout)
+                (self.dir / path).write_text(sources[path])
+
     def test_the_installer_finds_the_profile_by_cargo_toml_and_writes_its_files(self):
         self.assertIn('Profile(s) found from the files of the project: rust', self.installed.stderr)
         saved = json.loads((self.app / '.agents/stack.json').read_text())

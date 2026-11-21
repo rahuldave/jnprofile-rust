@@ -1,0 +1,16 @@
+{
+  "source_repository": "https://github.com/rahuldave/gossil.git",
+  "files": {
+    "tests/fixtures/declarations/gossil_config.rs": {
+      "source": "src/ui/config.rs",
+      "sha256": "fff0299f98af291ce8be96e288eec15a0f459ce26a6280634811dee616e83ee0"
+    },
+    "tests/fixtures/declarations/gossil_block.rs": {
+      "source": "src/ui/markdown/block.rs",
+      "sha256": "99ae305e9ffd55ff1268229538479f3a5aca4a8340b39ca47773afc862f9556d"
+    }
+  },
+  "source_head": "146789901c95c0baf66baa5b80381411a8ba0b6c",
+  "source_state": "untracked working-tree files captured from the failing coverage run",
+  "failure_guard": "7a368cee-79f5-496a-8f48-6ad234f51fad"
+}
