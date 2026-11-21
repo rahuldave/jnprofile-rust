@@ -588,6 +588,41 @@ class Repository(unittest.TestCase):
         diff_cover, = calls
         self.assertNotIn('--exclude', diff_cover)
 
+    def test_unreported_vendor_diagnostic_keeps_failure_without_claiming_no_execution(self):
+        self.commit_one()
+        self.files('vendor/dep/build.rs')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('vendor/dep/build.rs: a changed file that is absent from the coverage report', out)
+        self.assertIn('reporting scope or copied source paths', out)
+        self.assertNotIn('so no test runs it', out)
+        self.assertIn('independent review', out)
+
+    def test_exact_vendor_exclusion_requires_prior_commit_and_does_not_cover_neighbors(self):
+        self.commit_one()
+        (self.root / '.agents').mkdir(exist_ok=True)
+        listing = self.root / '.agents/coverage-exclude.txt'
+        listing.write_text('# Independently reviewed pinned upstream source; project verifies integrity.\n'
+                           'vendor/dep/build.rs\n')
+        self.files('vendor/dep/build.rs')
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn('vendor/dep/build.rs:', out)
+        self.git('add', '.agents/coverage-exclude.txt')
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.git('commit', '-q', '-m', 'reviewed exclusion prerequisite')
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        self.files('vendor/dep/src/lib.rs', 'vendor/neighbor/build.rs', 'src/adapted.rs')
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        for path in ('vendor/dep/src/lib.rs', 'vendor/neighbor/build.rs', 'src/adapted.rs'):
+            self.assertIn(path + ':', out)
+        self.assertNotIn('vendor/dep/build.rs:', out)
+
     def test_the_merged_report_leaves_out_the_generated_files_of_the_parent(self):
         self.commit_one()
         (self.root / '.agents').mkdir(exist_ok=True)
