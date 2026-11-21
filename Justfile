@@ -8,7 +8,7 @@ default:
     @just --list --unsorted
 
 # Python comes from uv. The lab runs the installer of jnterfaces, which needs tomlkit and ruamel.yaml
-python := "uv run --no-project --quiet --python '>=3.11' --with tomlkit==0.15.2 --with ruamel.yaml==0.19.1 python"
+python := "uv run --no-project --quiet --python '>=3.11' --with tree-sitter==0.25.2 --with tree-sitter-rust==0.24.0 --with tomlkit==0.15.2 --with ruamel.yaml==0.19.1 python"
 
 # The checker of the nossaifd writing guide. Set NOSSAIFD_CHECK to use another copy
 checker := env("NOSSAIFD_CHECK", home_directory() / "Projects/nossaifd/check.py")
@@ -21,7 +21,7 @@ lint:
     {{ruff}} check .
     {{python}} -m json.tool profile.json > /dev/null
     {{python}} -m json.tool skill-package.json > /dev/null
-    {{python}} -m py_compile .agents/just/rust/steps.py .agents/just/rust/api_rule.py lab/lint_just.py lab/prose_check.py lab/ci_programs.py scripts/release_tag.py tests/test_lab.py tests/test_release.py tests/test_steps.py tests/test_profile.py tests/test_api.py
+    {{python}} -m py_compile .agents/just/rust/steps.py .agents/just/rust/declarations.py .agents/just/rust/api_rule.py lab/lint_just.py lab/prose_check.py lab/ci_programs.py scripts/release_tag.py tests/test_lab.py tests/test_release.py tests/test_steps.py tests/test_profile.py tests/test_api.py
     {{python}} lab/lint_just.py .agents/just/rust
 
 # Run the tests and the lab. Extra arguments go to unittest: just test tests.test_steps. JNTERFACES names jnterfaces, else

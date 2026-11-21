@@ -73,6 +73,10 @@ class Docs(unittest.TestCase):
 
 STAND_IN_CARGO = """#!/bin/sh
 if [ "$1" = metadata ]; then cat "$META"; exit "${META_CODE:-0}"; fi
+if [ "$1 $2" = "llvm-cov clean" ]; then
+  printf '%s\\n' "$*" > "$CLEAN_LOG"
+  exit "${CODE:-0}"
+fi
 printf '%s\\n' "$*" >> "$LOG"
 out=; name=x; last=
 for arg in "$@"; do
@@ -112,7 +116,7 @@ class Targets(unittest.TestCase):
         self.log = self.root / 'cargo.log'
         env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
         env.update(PATH=f'{self.root / "bin"}:{os.environ["PATH"]}', META=str(self.root / 'meta.json'),
-                   LOG=str(self.log))
+                   LOG=str(self.log), CLEAN_LOG=str(self.root / 'clean.log'))
         patched = mock.patch.dict(os.environ, env, clear=True)
         patched.start()
         self.addCleanup(patched.stop)
@@ -205,6 +209,12 @@ class Targets(unittest.TestCase):
                          'SF:/s/path+file:///x/1#p1@0.1.0.rs\nDA:1,1\nend_of_record\n'
                          'SF:/s/path+file:///x/2#p2@0.1.0.rs\nDA:1,1\nend_of_record\n')
 
+    def test_workspace_cleanup_preserves_the_locked_dependency_contract(self):
+        self.packages(['lib'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', []), 0)
+        self.assertEqual((self.root / 'clean.log').read_text(), 'llvm-cov clean --workspace --locked\n')
+
     def test_run_with_no_target_runs_no_cargo_test_and_writes_an_empty_report(self):
         self.packages(['lib'])
         steps.report('integration').parent.mkdir(parents=True)
@@ -295,12 +305,57 @@ class Repository(unittest.TestCase):
         self.git('commit', '-q', '-m', 'one')
         self.files('src/orphan.rs', 'examples/demo.rs', 'tests/api.rs', 'benches/b.rs', 'src/tests/mod.rs',
                    'src/skip.rs', 'notes.md')
+        for path in ('src/orphan.rs', 'examples/demo.rs', 'src/tests/mod.rs'):
+            Path(path).write_text('pub fn runtime() {}\n')
         (self.root / 'src/lib.rs').write_text('// changed\n')
         changed = steps.changed_code()
         self.assertEqual(changed, ['benches/b.rs', 'examples/demo.rs', 'src/lib.rs', 'src/orphan.rs', 'src/skip.rs',
                                    'src/tests/mod.rs', 'tests/api.rs'])
         self.assertEqual(steps.unreported(changed, {'src/lib.rs'}, lambda path: path == 'src/skip.rs'),
                          ['examples/demo.rs', 'src/orphan.rs', 'src/tests/mod.rs'])
+
+    def test_missing_declarations_are_classified_without_waiving_runtime_files(self):
+        sources = {
+            'src/plain.rs': '/// A type.\npub struct A { pub text: String }\npub enum B { One, Two }',
+            'src/modules.rs': 'pub mod child; pub use child::Thing; mod nested { pub struct Item; }',
+            'src/args.rs': '\n'.join([
+                'use clap::{Args, Subcommand, ValueEnum};',
+                '#[derive(Args, Clone, Debug, Default)] pub struct Options {',
+                '#[arg(long, value_parser=crate::values::parse, num_args=1..=3)] pub name: String,',
+                '#[arg(conflicts_with_all=["one", "two"])] pub other: bool, }',
+                '#[derive(Subcommand)] pub enum Commands { #[command(alias="ls")] List(Options) }',
+                '#[derive(ValueEnum, Clone)] pub enum Kind { #[value(name="a")] A }']),
+            'src/comments.rs': '/* fn bad() { /* nested */ } */ pub struct A; // impl X {}',
+            'src/empty.rs': '// empty declarations\n',
+        }
+        self.files(*sources)
+        for path, source in sources.items():
+            Path(path).write_text(source)
+        with mock.patch.object(steps, 'compiled_modules', return_value=set(sources)):
+            self.assertEqual(steps.unreported(list(sources), set(), lambda p: False), [])
+
+    def test_missing_runtime_or_unknown_syntax_stays_reportable(self):
+        runtime = [
+            'fn hidden() {}', 'impl A { fn hidden() {} }',
+            'trait T { fn hidden() {} }', 'const A: u8 = 1;', 'static A: u8 = 1;',
+            'enum E { A = call() }', 'struct B { a: [u8; { call() }] }',
+            'struct B<const N: usize = { call() }>;', 'mod x { fn hidden() {} }',
+            'include!("generated.rs");', 'macro_rules! make { () => {} }', 'make!();',
+            '#[custom] struct B;', '#[derive(Custom)] struct B;',
+            '#[cfg_attr(feature="x", custom)] struct B;',
+            'use other::Args; #[derive(Args)] struct B;',
+            'use clap::Args; #[derive(Args)] struct B { #[arg(value_parser=|x| x)] x: String }',
+            'use clap::Args; #[derive(Args)] struct B { #[arg(default_value_t=call())] x: u8 }',
+            'use clap::Args; #[derive(Args)] struct B { #[arg(long={ call() })] x: u8 }',
+            'pub struct Broken {',
+            '/// fn not_runtime() {}\nstruct A; fn actual() {}',
+            '#[doc=r###"} fn fake() {"###] struct A; fn actual() {}',
+        ]
+        self.files('src/probe.rs')
+        for source in runtime:
+            with self.subTest(source=source):
+                Path('src/probe.rs').write_text(source)
+                self.assertEqual(steps.unreported(['src/probe.rs'], set(), lambda p: False), ['src/probe.rs'])
 
     def test_ignored_counts_an_ignored_untracked_file_and_a_path_outside_but_not_a_tracked_file(self):
         (self.root / '.gitignore').write_text('/target/\n')

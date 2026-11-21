@@ -30,3 +30,15 @@ These rules add to the base task for the Rust tests of the change.
   step. Check that such code has a test that runs on a platform where it compiles.
 - **Ignored tests.** Each new `#[ignore]` names a reason, as in `#[ignore = "needs a network"]`. An ignored test
   does not run in `just test`, so its lines do not count as covered.
+
+- **Declaration files absent from LCOV.** The syntax check may accept type and module declarations,
+  including known Clap derives. Its diagnostic does not qualify generated parser behavior. Require tests
+  for generated parsers and named callbacks, and review their macro behavior. Unknown syntax, custom
+  derives and handwritten executable bodies must retain the missing-file failure. Require current-run
+  successful compiler dependencies and a plain module path from the compiled crate root. Unmounted files,
+  conditional module paths, data-only inputs and stale evidence must retain the failure.
+
+## Recommendations
+
+Prefer tests for reachable Rust code. Accept an absent declaration file only with current-run compiler and
+module evidence, and run `just coverage-check` after each source change.

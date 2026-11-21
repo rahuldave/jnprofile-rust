@@ -5,8 +5,8 @@ The recipes in this folder run it with uv: python steps.py run STEP ARG..., fres
 PATH... and toml. STEP is test or integration. test runs the unit tests, those of the library and the binaries, and
 integration runs the test targets, such as the files of the folder tests. Each writes its own coverage report. The
 run ID JLOG_RUN of the root Justfile and the worktree tree tie each report to its run, so that coverage-check reads a
-report only in the same run. It needs Python 3.11 or later and no package. The step coverage-check also needs
-diff-cover, which it runs with uv.
+report only in the same run. It needs Python 3.11 or later. The recipes pin the tree-sitter runtime and Rust
+grammar for declaration classification. coverage-check also runs pinned diff-cover with uv.
 
 The lists .agents/generated.txt and .agents/coverage-exclude.txt come from the parent commit, through git show
 HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent without the file, the list is empty.
@@ -14,6 +14,7 @@ git matches their patterns, as pathspecs with the magic word glob. Every path is
 of the project, which can be a subfolder of the git repository.
 """
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -26,6 +27,7 @@ import tempfile
 import threading
 import tomllib
 import urllib.parse
+import uuid
 
 DIFF_COVER = 'diff-cover==11.0.1'
 # The other place of the config of cargo-sort, which reads tomlfmt.toml from the current folder.
@@ -428,6 +430,7 @@ def run_tests(step, args):
     target for STEP, no test runs and the report is empty. Returns the exit code of the first cargo that fails.
     """
     out = report(step)
+    (REPORTS / f'{step}.modules.json').unlink(missing_ok=True)
     out.unlink(missing_ok=True)
     REPORTS.mkdir(parents=True, exist_ok=True)
     for old in REPORTS.glob(f'{step}.part*.lcov'):
@@ -446,15 +449,40 @@ def run_tests(step, args):
         out.write_text('')
         return stamp(step)
     parts = []
+    # Cargo's cached dependency files do not prove current compiler participation.
+    # Clean workspace artifacts only, retaining third-party dependency builds.
+    code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode
+    if code:
+        pending_run(step).unlink(missing_ok=True)
+        return code
+    evidence = (REPORTS / (step + '.compiler-' + uuid.uuid4().hex)).resolve()
+    evidence.mkdir()
+    launcher = evidence / 'rustc-wrapper'
+    helper = Path(__file__).with_name('compiler_evidence.py').resolve()
+    launcher.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + ' "$@"\n')
+    launcher.chmod(0o755)
+    env = dict(os.environ, RUSTC_WRAPPER=str(launcher), JNPROFILE_SOURCE_ROOT=str(top()),
+               JNPROFILE_COMPILER_EVIDENCE=str(evidence),
+               JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
         command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
-        code = subprocess.run(command).returncode
+        code = subprocess.run(command, env=env).returncode
         if code:
             pending_run(step).unlink(missing_ok=True)
             return code
     out.write_text(merge_lcov([part.read_text() for part in parts]))
+    sources = {}
+    for receipt in evidence.glob('*.json'):
+        try:
+            data = json.loads(receipt.read_text())
+            if data.get('schema') == 1 and isinstance(data.get('sources'), dict):
+                sources.update(data['sources'])
+        except (OSError, ValueError):
+            continue
+    (REPORTS / f'{step}.modules.json').write_text(json.dumps({
+        'schema': 1, 'run': os.environ.get('JLOG_RUN', ''), 'tree': worktree_tree(), 'sources': sources}) + '\n')
     return stamp(step)
 
 
@@ -502,13 +530,62 @@ def test_file(path):
     return len(parts) > 1 and parts[0] in ('tests', 'benches')
 
 
-def unreported(changed, lines, excluded):
-    """The files of CHANGED that are not in the report, not excluded and not test files: no test can cover them.
+def declaration_category(path):
+    """Load the shipped parser helper by path, without changing unrelated commands' imports."""
+    try:
+        spec = importlib.util.spec_from_file_location('jnprofile_rust_declarations',
+                                                     Path(__file__).with_name('declarations.py'))
+        module = importlib.util.module_from_spec(spec)
+        bytecode = sys.dont_write_bytecode
+        try:
+            sys.dont_write_bytecode = True
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = bytecode
+        return module.classify(path)
+    except Exception as exc:
+        return None, f'Rust declaration helper unavailable or failed: {exc}'
 
-    cargo llvm-cov leaves out a file that no test target compiles, such as a file that no mod names or a file in
-    examples. It also leaves out each file in a folder named tests, examples or benches, at any depth.
+
+def compiled_modules():
+    """Current-run, current-tree compiler/module evidence from counting test steps."""
+    found = set()
+    run, tree = os.environ.get('JLOG_RUN', ''), worktree_tree()
+    if not run or not tree:
+        return found
+    for step in COVERED:
+        if not counts(step) or not fresh(step):
+            continue
+        try:
+            data = json.loads((REPORTS / f'{step}.modules.json').read_text())
+            if data.get('schema') != 1 or data.get('run') != run or data.get('tree') != tree:
+                continue
+            for path, value in data['sources'].items():
+                if hashlib.sha256(Path(path).read_bytes()).hexdigest() == value:
+                    found.add(path)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+    return found
+
+
+def unreported(changed, lines, excluded):
+    """Changed files absent from LCOV that do not qualify for a syntax-only declaration category.
+
+    Absence may reflect an uncompiled file or reporting scope. Keep that failure
+    unless the whole current source passes the positive declaration check.
     """
-    return [path for path in changed if path not in lines and not excluded(path) and not test_file(path)]
+    missing = []
+    compiled = compiled_modules()
+    for path in changed:
+        if path in lines or excluded(path) or test_file(path):
+            continue
+        category, reason = declaration_category(path)
+        if category and path in compiled:
+            print(f'{path}: absent from LCOV; {category}; current-run compiled module (no authored executable source)')
+        else:
+            print(f'{path}: declaration classification did not qualify: {reason or "no current-run module evidence"}')
+            missing.append(path)
+    return missing
 
 
 def missed_lines(text, root):
@@ -567,15 +644,15 @@ def coverage():
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(), lines, excluded)
     for path in missing:
-        print(f'{path}: a changed file that is not in the coverage report, so no test runs it')
+        print(f'{path}: a changed file that is absent from the coverage report')
     if missing:
-        print('coverage-check: no test target compiles these files, or cargo llvm-cov leaves out their folder. Call '
-              'the code from a test, move it out of a folder named tests or examples, or exclude the file',
+        print('coverage-check: inspect test targets, reporting scope or copied source paths; absence does not prove '
+              'that no test runs a file. Add coverage or seek independent review under the Rust test-review rules',
               file=sys.stderr)
         code = code or 1
     if code:
-        print('coverage-check: write tests for the missing lines. A file that no test can run goes in '
-              f'{COVERAGE_EXCLUDE}, in a commit of its own before this one', file=sys.stderr)
+        print('coverage-check: write tests for missing lines. Any permitted exclusion needs independent review and '
+              f'a separate prior commit in {COVERAGE_EXCLUDE}; see the Rust test-review rules', file=sys.stderr)
     return code
 
 
