@@ -370,6 +370,7 @@ class RustLab(unittest.TestCase):
     def test_installed_parser_accepts_declarations_and_retains_runtime_files(self):
         payload = self.dir / '.agents/just/rust'
         self.assertTrue((payload / 'declarations.py').is_file())
+        self.assertTrue((payload / 'compiler_evidence.py').is_file())
         recipe = (payload / 'base.just').read_text().split('rust_py := "', 1)[1].split('"', 1)[0]
         command = shlex.split(recipe)
         (self.dir / 'src/declaration.rs').write_text('use clap::Args; #[derive(Args)] pub struct A;')
@@ -379,6 +380,34 @@ class RustLab(unittest.TestCase):
                  'assert declarations.classify("src/orphan.rs")[0] is None')
         done = run([*command, '-I', '-c', probe], self.dir)
         self.assertEqual(done.returncode, 0, self.out(done))
+
+    def test_current_compiler_module_proof_pairs_declarations_with_absent_source_failures(self):
+        cases = {
+            'mounted': ('pub struct Declaration;', 'pub mod candidate;', 0),
+            'unmounted': ('pub struct Declaration;', '', 1),
+            'include_str': ('pub struct Declaration;',
+                            'pub const DATA: &str = include_str!("candidate.rs");', 1),
+            'include_bytes': ('pub struct Declaration;',
+                              'pub const DATA: &[u8] = include_bytes!("candidate.rs");', 1),
+            'cfg_disabled': ('pub struct Declaration;', '#[cfg(any())] pub mod candidate;', 1),
+            'cfg_disabled_data': ('pub struct Declaration;',
+                                  '#[cfg(any())] pub mod candidate;\n'
+                                  'pub const DATA: &str = include_str!("candidate.rs");', 1),
+            'executable': ('pub fn uncalled() -> u8 { 42 }', 'pub mod candidate;', 1),
+            'dead': ('pub fn uncalled() -> u8 { 42 }', '', 1),
+            'unknown': ('#[repr(C)] pub struct Declaration;', 'pub mod candidate;', 1),
+        }
+        for name, (source, edge, expected) in cases.items():
+            with self.subTest(name=name):
+                self.reset()
+                (self.dir / 'src/candidate.rs').write_text(source)
+                (self.dir / 'src/lib.rs').write_text(LIB + '\n' + edge + '\n')
+                done = self.just('coverage-check')
+                self.assertEqual(done.returncode, expected, self.out(done))
+                if not expected:
+                    self.assertIn('current-run compiled module', done.stdout)
+                else:
+                    self.assertIn('src/candidate.rs', done.stdout)
 
     def test_the_installer_finds_the_profile_by_cargo_toml_and_writes_its_files(self):
         self.assertIn('Profile(s) found from the files of the project: rust', self.installed.stderr)
@@ -738,11 +767,13 @@ class RustLab(unittest.TestCase):
             self.assertEqual(done.returncode, 0, f'{step}:\n{self.out(done)}')
 
     def test_coverage_check_alone_runs_the_tests_again(self):
+        # An enclosing guarded test run may export JLOG_RUN. These independent
+        # just calls deliberately represent separate runs, regardless of it.
         for step in ('test', 'integration'):
             report = self.dir / f'target/llvm-cov/{step}.lcov'
-            self.assertEqual(self.just(step).returncode, 0)
+            self.assertEqual(self.just(step, env=dict(os.environ, JLOG_RUN=f'producer-{step}')).returncode, 0)
             report.write_text('SF:old\nend_of_record\n')
-        done = self.just('coverage-check')
+        done = self.just('coverage-check', env=dict(os.environ, JLOG_RUN='standalone-consumer'))
         self.assertEqual(done.returncode, 0, self.out(done))
         for step in ('test', 'integration'):
             report = (self.dir / f'target/llvm-cov/{step}.lcov').read_text()

@@ -73,6 +73,10 @@ class Docs(unittest.TestCase):
 
 STAND_IN_CARGO = """#!/bin/sh
 if [ "$1" = metadata ]; then cat "$META"; exit "${META_CODE:-0}"; fi
+if [ "$1 $2" = "llvm-cov clean" ]; then
+  printf '%s\\n' "$*" > "$CLEAN_LOG"
+  exit "${CODE:-0}"
+fi
 printf '%s\\n' "$*" >> "$LOG"
 out=; name=x; last=
 for arg in "$@"; do
@@ -112,7 +116,7 @@ class Targets(unittest.TestCase):
         self.log = self.root / 'cargo.log'
         env = {k: v for k, v in os.environ.items() if k != 'JLOG_RUN'}
         env.update(PATH=f'{self.root / "bin"}:{os.environ["PATH"]}', META=str(self.root / 'meta.json'),
-                   LOG=str(self.log))
+                   LOG=str(self.log), CLEAN_LOG=str(self.root / 'clean.log'))
         patched = mock.patch.dict(os.environ, env, clear=True)
         patched.start()
         self.addCleanup(patched.stop)
@@ -204,6 +208,12 @@ class Targets(unittest.TestCase):
         self.assertEqual(steps.report('test').read_text(),
                          'SF:/s/path+file:///x/1#p1@0.1.0.rs\nDA:1,1\nend_of_record\n'
                          'SF:/s/path+file:///x/2#p2@0.1.0.rs\nDA:1,1\nend_of_record\n')
+
+    def test_workspace_cleanup_preserves_the_locked_dependency_contract(self):
+        self.packages(['lib'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', []), 0)
+        self.assertEqual((self.root / 'clean.log').read_text(), 'llvm-cov clean --workspace --locked\n')
 
     def test_run_with_no_target_runs_no_cargo_test_and_writes_an_empty_report(self):
         self.packages(['lib'])
@@ -321,7 +331,8 @@ class Repository(unittest.TestCase):
         self.files(*sources)
         for path, source in sources.items():
             Path(path).write_text(source)
-        self.assertEqual(steps.unreported(list(sources), set(), lambda p: False), [])
+        with mock.patch.object(steps, 'compiled_modules', return_value=set(sources)):
+            self.assertEqual(steps.unreported(list(sources), set(), lambda p: False), [])
 
     def test_missing_runtime_or_unknown_syntax_stays_reportable(self):
         runtime = [

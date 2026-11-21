@@ -15,23 +15,7 @@ These rules add to the base task for the Rust tests of the change.
 - **The exclude list.** Stable Rust has no pragma that leaves out one line from the coverage. So the profile reads
   `.agents/coverage-exclude.txt`, a list of files and globs, from the parent commit. Each new entry needs a reason
   in a comment line above it, for example `# the main function only parses the arguments`. An entry without a
-  reason, or an entry that names a file with logic that a test can reach, is a finding unless it meets
-  every condition of the unchanged upstream source rule below.
-- **Unchanged upstream source.** Independent review may accept an exact path in `coverage-exclude.txt` for
-  a file imported unchanged from a pinned third-party release. A glob or a folder entry is a finding.
-  The review must precede the import, and the exclusion must be in a separate prior commit. Require all of these:
-  - A comment above each path names the release, the reason and the evidence for review.
-  - The evidence identifies the complete release archive and its digest, accounts for every archive and
-    imported path, and proves byte identity for each excluded file. Account for every local change elsewhere.
-  - The project has an always-run source and provenance check in `just check` and CI, plus a staged commit
-    guard that verifies the complete source inventory and bytes that will be committed.
-  - Meaningful caller behavior and regression tests remain required. Source integrity replaces line coverage
-    for this first import only; it never qualifies runtime behavior, helpers, branches, features or platforms.
-  - Each release or byte change requires new independent review. First-party and locally adapted Rust files
-    cannot use this exception. A path dependency or a folder named `vendor` gives no exemption.
-  The upstream source conditions are review requirements. The profile does not verify provenance or infer exemptions from paths.
-  Handwritten upstream build scripts and library helpers are reachable logic, not generated or untestable.
-  Actual generated bindings may use exact entries in `generated.txt`, with their generator and reason.
+  reason, or an entry that names a file with logic that a test can reach, is a finding.
 - **Files that a list already excludes.** A change to a file that the parent commit already lists in
   `coverage-exclude.txt` or `generated.txt` passes `coverage-check` without a test. Judge each such change, and
   report new logic in it that a test can reach.
@@ -50,9 +34,11 @@ These rules add to the base task for the Rust tests of the change.
 - **Declaration files absent from LCOV.** The syntax check may accept type and module declarations,
   including known Clap derives. Its diagnostic does not qualify generated parser behavior. Require tests
   for generated parsers and named callbacks, and review their macro behavior. Unknown syntax, custom
-  derives and handwritten executable bodies must retain the missing-file failure.
+  derives and handwritten executable bodies must retain the missing-file failure. Require current-run
+  successful compiler dependencies and a plain module path from the compiled crate root. Unmounted files,
+  conditional module paths, data-only inputs and stale evidence must retain the failure.
 
 ## Recommendations
 
-Prefer coverage for reachable Rust code. Use the unchanged upstream source exception only after independent
-review of every condition above, then commit the exact exclusions before importing the source.
+Prefer tests for reachable Rust code. Accept an absent declaration file only with current-run compiler and
+module evidence, and run `just coverage-check` after each source change.

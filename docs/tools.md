@@ -73,7 +73,11 @@ The report of `integration` counts only when `integration` is in the steps of `j
 
 So `coverage-check` also fails on each changed `.rs` file that is not in the report. The exceptions are the files in the folder `tests` or `benches` of a package, the files of the two lists, and files that pass the declaration check below. On the first commit, the step checks only the files in the reports. The build script `build.rs` is in the report.
 
-The declaration check parses the whole current file with tree-sitter 0.25.2 and its Rust grammar 0.24.0. It accepts imports, modules and type declarations, including empty files. It rejects handwritten functions, impls, initializers, macros, syntax errors and unknown syntax or attributes. Parser or file errors retain the missing-file failure. Each accepted absent file prints its category; this records syntax, not executable coverage. An LCOV record with a zero count still fails under the usual rules.
+The declaration check parses the whole current file with tree-sitter 0.25.2 and its Rust grammar 0.24.0. It accepts imports, modules and type declarations, including empty files. It rejects handwritten functions, impls, initializers, macros, syntax errors and unknown syntax or attributes. Parser or file errors retain the missing-file failure.
+
+The step also needs module evidence from a successful compiler call in the current test run. It cleans workspace coverage artifacts before testing, preserves dependency builds, and records fresh compiler dependencies with source hashes. A plain module path from that compiler target must reach the file. Conditional or attributed module paths and files read only as data do not qualify.
+
+A pre-existing compiler wrapper still runs, but cannot supply module evidence because it may return cached output. The run, worktree and source hashes must still match. Each accepted absent file prints its category and module evidence; it has no authored executable source to measure. An LCOV record with a zero count still fails under the usual rules.
 
 Known Clap derives (`Args`, `Subcommand`, `ValueEnum`, `Parser`) and built-in derives may qualify. The check resolves explicit Clap imports and rejects shadowed or unknown derives. Known helper attributes accept literals, named paths, literal lists and ranges; calls, closures, blocks and macros fail. A named parser callback keeps its own coverage obligation in its source file. Generated parser behavior still needs tests and macro review.
 

@@ -80,7 +80,8 @@ class DeclarationParser(unittest.TestCase):
             Path('src/decl.rs').write_text('pub struct A;')
             Path('src/orphan.rs').write_text('pub fn orphan() {}')
             fixture.write_reports([], [])
-            with (fixture.diff_cover(), contextlib.redirect_stdout(io.StringIO()),
+            with (fixture.diff_cover(), mock.patch.object(steps, 'compiled_modules', return_value={'src/decl.rs'}),
+                  contextlib.redirect_stdout(io.StringIO()),
                   contextlib.redirect_stderr(io.StringIO())):
                 self.assertEqual(steps.coverage(), 1)
                 Path('src/orphan.rs').unlink()

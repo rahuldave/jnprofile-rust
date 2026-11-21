@@ -14,6 +14,7 @@ git matches their patterns, as pathspecs with the magic word glob. Every path is
 of the project, which can be a subfolder of the git repository.
 """
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -26,6 +27,7 @@ import tempfile
 import threading
 import tomllib
 import urllib.parse
+import uuid
 
 DIFF_COVER = 'diff-cover==11.0.1'
 # The other place of the config of cargo-sort, which reads tomlfmt.toml from the current folder.
@@ -428,6 +430,7 @@ def run_tests(step, args):
     target for STEP, no test runs and the report is empty. Returns the exit code of the first cargo that fails.
     """
     out = report(step)
+    (REPORTS / f'{step}.modules.json').unlink(missing_ok=True)
     out.unlink(missing_ok=True)
     REPORTS.mkdir(parents=True, exist_ok=True)
     for old in REPORTS.glob(f'{step}.part*.lcov'):
@@ -446,15 +449,40 @@ def run_tests(step, args):
         out.write_text('')
         return stamp(step)
     parts = []
+    # Cargo's cached dependency files do not prove current compiler participation.
+    # Clean workspace artifacts only, retaining third-party dependency builds.
+    code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode
+    if code:
+        pending_run(step).unlink(missing_ok=True)
+        return code
+    evidence = (REPORTS / (step + '.compiler-' + uuid.uuid4().hex)).resolve()
+    evidence.mkdir()
+    launcher = evidence / 'rustc-wrapper'
+    helper = Path(__file__).with_name('compiler_evidence.py').resolve()
+    launcher.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + ' "$@"\n')
+    launcher.chmod(0o755)
+    env = dict(os.environ, RUSTC_WRAPPER=str(launcher), JNPROFILE_SOURCE_ROOT=str(top()),
+               JNPROFILE_COMPILER_EVIDENCE=str(evidence),
+               JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
         command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
-        code = subprocess.run(command).returncode
+        code = subprocess.run(command, env=env).returncode
         if code:
             pending_run(step).unlink(missing_ok=True)
             return code
     out.write_text(merge_lcov([part.read_text() for part in parts]))
+    sources = {}
+    for receipt in evidence.glob('*.json'):
+        try:
+            data = json.loads(receipt.read_text())
+            if data.get('schema') == 1 and isinstance(data.get('sources'), dict):
+                sources.update(data['sources'])
+        except (OSError, ValueError):
+            continue
+    (REPORTS / f'{step}.modules.json').write_text(json.dumps({
+        'schema': 1, 'run': os.environ.get('JLOG_RUN', ''), 'tree': worktree_tree(), 'sources': sources}) + '\n')
     return stamp(step)
 
 
@@ -519,6 +547,27 @@ def declaration_category(path):
         return None, f'Rust declaration helper unavailable or failed: {exc}'
 
 
+def compiled_modules():
+    """Current-run, current-tree compiler/module evidence from counting test steps."""
+    found = set()
+    run, tree = os.environ.get('JLOG_RUN', ''), worktree_tree()
+    if not run or not tree:
+        return found
+    for step in COVERED:
+        if not counts(step) or not fresh(step):
+            continue
+        try:
+            data = json.loads((REPORTS / f'{step}.modules.json').read_text())
+            if data.get('schema') != 1 or data.get('run') != run or data.get('tree') != tree:
+                continue
+            for path, value in data['sources'].items():
+                if hashlib.sha256(Path(path).read_bytes()).hexdigest() == value:
+                    found.add(path)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+    return found
+
+
 def unreported(changed, lines, excluded):
     """Changed files absent from LCOV that do not qualify for a syntax-only declaration category.
 
@@ -526,14 +575,15 @@ def unreported(changed, lines, excluded):
     unless the whole current source passes the positive declaration check.
     """
     missing = []
+    compiled = compiled_modules()
     for path in changed:
         if path in lines or excluded(path) or test_file(path):
             continue
         category, reason = declaration_category(path)
-        if category:
-            print(f'{path}: absent from LCOV; {category} (syntax classification, not executable coverage)')
+        if category and path in compiled:
+            print(f'{path}: absent from LCOV; {category}; current-run compiled module (no authored executable source)')
         else:
-            print(f'{path}: declaration classification did not qualify: {reason}')
+            print(f'{path}: declaration classification did not qualify: {reason or "no current-run module evidence"}')
             missing.append(path)
     return missing
 
