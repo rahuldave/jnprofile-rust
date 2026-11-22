@@ -62,7 +62,12 @@ COVERED = ('test', 'integration')
 # The kinds of target of cargo metadata that --lib selects.
 LIBRARY = {'lib', 'rlib', 'dylib', 'cdylib', 'staticlib', 'proc-macro'}
 # The tests with coverage, with every feature. run adds the targets of the step and the path of its report.
-COVERAGE = ['cargo', 'llvm-cov', 'test', '--all-features', '--locked', '--include-build-script']
+COVERAGE = ['cargo', 'llvm-cov', 'test', '--all-features', '--locked', '--include-build-script', '--no-clean']
+VOLATILE = ('CARGO_MAKEFLAGS', 'CARGO_PKG_', 'CARGO_MANIFEST_', 'CARGO_CRATE_', 'CARGO_BIN_', 'CARGO_PRIMARY_PACKAGE',
+            'CARGO_CFG_', 'CARGO_TARGET_TMPDIR')
+# The files whose change can rename the build outputs of cargo, so that an old test binary stays beside the new one.
+BUILD_FILES = ('Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml', '.cargo/config',
+               '.cargo/config.toml')
 # The file of jnterfaces whose steps list says whether integration runs in just check.
 STACK = Path('.agents/stack.json')
 DOC_LINTS = ('missing_docs', 'clippy::missing_docs_in_private_items')
@@ -449,9 +454,7 @@ def run_tests(step, args):
         out.write_text('')
         return stamp(step)
     parts = []
-    # Cargo's cached dependency files do not prove current compiler participation.
-    # Clean workspace artifacts only, retaining third-party dependency builds.
-    code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode
+    code, save = clean_coverage_build()
     if code:
         pending_run(step).unlink(missing_ok=True)
         return code
@@ -473,6 +476,9 @@ def run_tests(step, args):
             pending_run(step).unlink(missing_ok=True)
             return code
     out.write_text(merge_lcov([part.read_text() for part in parts]))
+    # Extra arguments, such as --config, can change the build, so only a run without them saves the fingerprint.
+    if not args:
+        save()
     sources = {}
     for receipt in evidence.glob('*.json'):
         try:
@@ -484,6 +490,153 @@ def run_tests(step, args):
     (REPORTS / f'{step}.modules.json').write_text(json.dumps({
         'schema': 1, 'run': os.environ.get('JLOG_RUN', ''), 'tree': worktree_tree(), 'sources': sources}) + '\n')
     return stamp(step)
+
+
+def build_fingerprint(meta):
+    """What names the build outputs of cargo, as text: the compiler, the flags, and the build files of the project.
+
+    cargo puts a hash of these in the name of each test binary. When one changes, the old binary stays in the target
+    folder, and cargo llvm-cov reads it too. The fingerprint holds rustc -vV, the version of cargo llvm-cov, each
+    variable whose name starts with CARGO or RUST, and the hash of each build file, tracked or ignored, and of the
+    config of cargo in CARGO_HOME.
+    """
+    version = subprocess.run([os.environ.get('RUSTC') or 'rustc', '-vV'], capture_output=True, text=True).stdout
+    tool = subprocess.run(['cargo', 'llvm-cov', '--version'], capture_output=True, text=True).stdout
+    files = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').stdout.split('\0')
+    ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', '.cargo', '*/.cargo')
+    files += ignored.stdout.split('\0')
+    builds = sorted({name for name in files
+                     if name and any(name == end or name.endswith('/' + end) for end in BUILD_FILES)})
+    homes = [Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo')) / name for name in ('config', 'config.toml')]
+    hashes = {}
+    for path in [*builds, *(str(home) for home in homes)]:
+        try:
+            hashes[path] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            continue
+    # Cargo sets the variables of VOLATILE for each call of a program that it runs, and they name no build output.
+    flags = {name: value for name, value in os.environ.items()
+             if name.startswith(('CARGO', 'RUST')) and not name.startswith(VOLATILE)}
+    return json.dumps({'rustc': version, 'llvm-cov': tool, 'coverage': COVERAGE, 'env': flags, 'files': hashes,
+                       'members': sorted(meta.get('workspace_members', []))}, sort_keys=True)
+
+
+def dep_info(path):
+    """The source files that the dep-info file PATH of rustc lists for its output, as real paths."""
+    try:
+        first = Path(path).read_text().split('\n\n')[0].replace('\\ ', '\0')
+    except OSError:
+        return set()
+    _, _, deps = first.partition(': ')
+    return {os.path.realpath(name.replace('\0', ' ')) for name in deps.split() if name}
+
+
+def changed_packages(meta, folder):
+    """The names of the workspace packages to clean, or None when only a clean of the whole workspace is sure.
+
+    The packages are each one that holds a changed Rust file, and each that depends on one, directly or not, by any
+    kind of dependency. A test binary of a package holds the code of each package that it depends on. A binary that
+    this step does not build again, such as an integration test in the step test, keeps the old code, and llvm-cov
+    may take its counts for the new lines. The dependencies come from the resolved graph of cargo metadata, so a path
+    crate outside the workspace and a [patch] count too. A crate outside these packages that compiles a changed file,
+    through #[path] or include!, shows in its dep-info file in FOLDER, and then only a full clean is sure. So does a
+    changed file that is not Rust in any dep-info file, and a failed cargo metadata. cargo clean -p takes a name and
+    cleans each package of that name.
+    """
+    # The tests run with every feature, so the graph does too, or an optional dependency would have no edge.
+    done = subprocess.run(['cargo', 'metadata', '--format-version', '1', '--locked', '--all-features'],
+                          capture_output=True, text=True)
+    if done.returncode:
+        return None
+    full = json.loads(done.stdout)
+    members = {package['id']: package for package in meta['packages'] if package['id'] in set(full.get(
+        'workspace_members', []))}
+    folders = {Path(os.path.realpath(package['manifest_path'])).parent: package['id'] for package in members.values()}
+    users = {}
+    for node in (full.get('resolve') or {}).get('nodes', []):
+        for dependency in node.get('deps', []):
+            users.setdefault(dependency['pkg'], set()).add(node['id'])
+    changed = [os.path.realpath(path) for path in changed_code()]
+    found = set()
+    for path in changed:
+        here = Path(path).parent
+        for place in [here, *here.parents]:
+            if place in folders:
+                found.add(folders[place])
+                break
+    todo, seen = list(found), set(found)
+    while todo:
+        for user in users.get(todo.pop(), ()):
+            if user not in seen:
+                seen.add(user)
+                todo.append(user)
+    cleaned = {members[pid]['name'] for pid in seen if pid in members}
+    crates = {target['name'].replace('-', '_') for package in members.values() if package['name'] in cleaned
+              for target in package.get('targets', [])}
+    # A changed file that is not Rust, such as one that include! reads, is in no package of its own, so any crate
+    # that lists it needs a full clean.
+    tracked = git('diff', '-z', '--name-only', '--relative', '--diff-filter=d', 'HEAD').stdout.split('\0')
+    untracked = git('ls-files', '-z', '--others', '--exclude-standard').stdout.split('\0')
+    others = {os.path.realpath(path) for path in tracked + untracked if path and not path.endswith('.rs')}
+    for info in folder.glob('**/deps/*.d'):
+        sources = dep_info(info)
+        if sources & others or (info.stem.rpartition('-')[0] not in crates and sources & set(changed)):
+            return None
+    return sorted(cleaned)
+
+
+def clean_coverage_build():
+    """Clean what the coverage build of the next run needs to build again, and keep the rest warm.
+
+    The tests run with --no-clean, so the profraw files of an earlier run are removed first. The evidence of
+    compiler_evidence.py counts a changed file only when rustc runs on it in this run, so each package that holds a
+    changed Rust file is cleaned, with each package that depends on it, and rustc compiles it again. On the first
+    run, with no parent commit, or when the fingerprint of the build changed, the whole workspace is cleaned, as
+    cargo llvm-cov does by default. So is it on each run with a build folder of its own, from build.build-dir or the
+    variables of cargo llvm-cov. The third party builds stay in each case.
+
+    Returns the exit code and a function that saves the fingerprint, for after the runs pass. cargo llvm-cov clean
+    exits with 0 even when its cargo clean fails, so only a passed run shows that the clean took place.
+    """
+    done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        return done.returncode, None
+    meta = json.loads(done.stdout)
+    folder = Path(meta.get('target_directory', 'target')) / 'llvm-cov-target'
+    stamp = folder / 'jnprofile-rust-build.txt'
+    fingerprint = build_fingerprint(meta)
+    # With another build folder, or a folder of cargo llvm-cov of its own, cargo clean -p would clean another folder
+    # than the build of coverage. So each run cleans the whole workspace, as before.
+    moved = (meta.get('build_directory', meta.get('target_directory')) != meta.get('target_directory')
+             or os.environ.get('CARGO_LLVM_COV_TARGET_DIR') or os.environ.get('CARGO_LLVM_COV_BUILD_DIR'))
+    try:
+        warm = not moved and has_parent() and stamp.read_text() == fingerprint
+    except OSError:
+        warm = False
+
+    def save():
+        if not moved:
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(fingerprint)
+    if not warm:
+        stamp.unlink(missing_ok=True)
+        print('coverage: a full clean of the workspace, for the first run or a new build fingerprint', flush=True)
+        return subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode, save
+    packages = changed_packages(meta, folder)
+    if packages is None:
+        stamp.unlink(missing_ok=True)
+        print('coverage: a full clean of the workspace, since no smaller clean is sure', flush=True)
+        return subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode, save
+    code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--profraw-only', '--locked']).returncode
+    for package in packages if code == 0 else []:
+        print(f'coverage: clean {package}, which holds a changed Rust file', flush=True)
+        code = subprocess.run(['cargo', 'clean', '--locked', '--target-dir', str(folder), '-p', package]).returncode
+        if code:
+            break
+    if code:
+        stamp.unlink(missing_ok=True)
+    return code, save
 
 
 def changed_code():
