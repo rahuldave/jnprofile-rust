@@ -195,6 +195,33 @@ class Targets(StandInCargo):
             'llvm-cov test --all-features --locked --include-build-script --no-clean --lcov --output-path '
             'target/llvm-cov/test.part0.lcov -p core --lib'])
 
+    def quick(self, *args):
+        """Run quick_test with ARGS, and return its exit code and the commands of the stand-in cargo."""
+        self.log.unlink(missing_ok=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = steps.quick_test(list(args))
+        return code, self.log.read_text().splitlines() if self.log.exists() else []
+
+    def test_quick_test_takes_the_targets_of_just_test_with_a_plain_cargo_test(self):
+        """A workspace with no library gets no --lib, which cargo test refuses there."""
+        self.packages([('bin', 'app', True), ('test', 'it', True)])
+        self.assertEqual(self.quick('parse'), (0, ['test --all-features --locked --workspace --bin app parse']))
+        self.packages([('lib', 'a', False)], [('lib', 'b', True)])
+        self.assertEqual(self.quick(), (0, ['test --all-features --locked --package path+file:///x/1#p1@0.1.0 --lib']))
+        self.packages(['test'])
+        self.assertEqual(self.quick(), (0, []))
+
+    def test_quick_test_lets_extra_arguments_that_choose_take_the_place_of_the_selections(self):
+        self.packages(['lib', 'bin'])
+        self.assertEqual(self.quick('-p', 'core'), (0, ['test --all-features --locked -p core']))
+        self.assertEqual(self.quick('--test', 'it'), (0, ['test --all-features --locked --workspace --test it']))
+
+    def test_quick_test_stops_at_the_first_cargo_that_fails(self):
+        self.packages([('lib', 'a', False)], ['lib'], ['lib'])
+        os.environ['CODE'] = '101'
+        code, log = self.quick()
+        self.assertEqual((code, len(log)), (101, 1))
+
     def test_run_gives_cargo_the_targets_the_report_and_the_arguments_last(self):
         self.packages(['lib', ('test', 'api', True)])
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -475,6 +502,24 @@ class WarmCoverageCargo(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo'), 'needs cargo llvm-cov')
+class QuickTestCargo(unittest.TestCase):
+    """The real cargo test of quick-test, on a package with only a binary, where cargo test --lib fails."""
+
+    def test_a_package_with_only_a_binary_runs_its_tests(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "single"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/main.rs').write_text('fn main() {}\n#[cfg(test)]\nmod t { #[test] fn unit_ran() {} }\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'quick-test'], cwd=root,
+                              env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('unit_ran', done.stdout)
+
+
 class WarmCoverageSteps(unittest.TestCase):
     """run_tests with the real cargo llvm-cov and the real wrapper of the evidence, in a workspace of two packages.
 

@@ -405,6 +405,30 @@ def chosen_by(args):
     return found
 
 
+def quick_test(args):
+    """Run the unit tests with a plain cargo test, without coverage, and return the exit code of the first that fails.
+
+    It takes the targets of just test, from selections, so a workspace with no library and a library with
+    test = false work as there. ARGS go to cargo test, and when they select targets or packages, such as -p core,
+    they take the place of the selections. With no library or binary, no test runs.
+    """
+    chosen = chosen_by(args)
+    try:
+        runs = [[]] if chosen == 'packages' else [['--workspace']] if chosen else selections('test')
+    except SystemExit as error:
+        print(error, file=sys.stderr, flush=True)
+        return 1
+    if not runs:
+        print('quick: the workspace has no library or binary, so no unit test runs', flush=True)
+    for selection in runs:
+        command = ['cargo', 'test', '--all-features', '--locked', *selection, *args]
+        print(shlex.join(command), flush=True)
+        code = subprocess.run(command).returncode
+        if code:
+            return code
+    return 0
+
+
 def merge_lcov(texts):
     """One LCOV report from the reports TEXTS: a line runs when one report runs it.
 
@@ -1528,6 +1552,8 @@ def main(argv):
         return run_tests(argv[1], argv[2:])
     if len(argv) == 2 and argv[0] == 'fresh' and argv[1] in COVERED:
         return 0 if fresh(argv[1]) else 1
+    if argv[:1] == ['quick-test']:
+        return quick_test(argv[1:])
     if argv == ['coverage']:
         return coverage()
     if argv == ['docs']:
@@ -1554,7 +1580,8 @@ def main(argv):
     if argv[:1] == ['config'] and len(argv) == 3:
         own = rust_config(argv[1], argv[2], False)
         return own if isinstance(own, int) else 0
-    print('usage: steps.py run STEP [ARG...] | fresh STEP | coverage | docs | test-paths [PATH...] | toml [--check] | '
+    print('usage: steps.py run STEP [ARG...] | fresh STEP | quick-test [ARG...] | coverage | docs | '
+          'test-paths [PATH...] | toml [--check] | '
           'ran prose [ARG...] | begin prose [ARG...] | stamp prose | api check | api prose [--base REF] | '
           'version | pages DOCS OUT [FILE...] | config DOCS OUT, where STEP is test or integration', file=sys.stderr)
     return 2
