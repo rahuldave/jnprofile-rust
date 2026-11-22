@@ -73,9 +73,10 @@ class Docs(unittest.TestCase):
 
 STAND_IN_CARGO = """#!/bin/sh
 if [ "$1" = metadata ]; then cat "$META"; exit "${META_CODE:-0}"; fi
-if [ "$1 $2" = "llvm-cov clean" ]; then
-  printf '%s\\n' "$*" > "$CLEAN_LOG"
-  exit "${CODE:-0}"
+if [ "$1 $2" = "llvm-cov --version" ]; then echo "cargo-llvm-cov 0.9.1"; exit 0; fi
+if [ "$1 $2" = "llvm-cov clean" ] || [ "$1" = clean ]; then
+  printf '%s\\n' "$*" >> "$CLEAN_LOG"
+  exit "${CLEAN_CODE:-${CODE:-0}}"
 fi
 printf '%s\\n' "$*" >> "$LOG"
 out=; name=x; last=
@@ -103,8 +104,8 @@ class Merge(unittest.TestCase):
                                             'end_of_record\n', root), ['a.rs:3', 'b.rs:5'])
 
 
-class Targets(unittest.TestCase):
-    """target_flags and run_tests, with a stand-in cargo that prints the metadata and logs its arguments."""
+class StandInCargo(unittest.TestCase):
+    """A scratch folder with a stand-in cargo that prints the metadata and logs its arguments."""
 
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -123,6 +124,10 @@ class Targets(unittest.TestCase):
         old = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, old)
+
+
+class Targets(StandInCargo):
+    """target_flags and run_tests, with a stand-in cargo that prints the metadata and logs its arguments."""
 
     def packages(self, *groups):
         """Write the metadata of a workspace with one package for each list of targets in GROUPS.
@@ -181,20 +186,20 @@ class Targets(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(steps.run_tests('integration', ['--test', 'api']), 0)
         self.assertEqual(self.log.read_text().splitlines(), [
-            'llvm-cov test --all-features --locked --include-build-script --workspace --lcov --output-path '
+            'llvm-cov test --all-features --locked --include-build-script --no-clean --workspace --lcov --output-path '
             'target/llvm-cov/integration.part0.lcov --test api'])
         self.log.unlink()
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(steps.run_tests('test', ['-p', 'core', '--lib']), 0)
         self.assertEqual(self.log.read_text().splitlines(), [
-            'llvm-cov test --all-features --locked --include-build-script --lcov --output-path '
+            'llvm-cov test --all-features --locked --include-build-script --no-clean --lcov --output-path '
             'target/llvm-cov/test.part0.lcov -p core --lib'])
 
     def test_run_gives_cargo_the_targets_the_report_and_the_arguments_last(self):
         self.packages(['lib', ('test', 'api', True)])
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(steps.run_tests('integration', ['parse', '--', '--nocapture']), 0)
-        want = ('llvm-cov test --all-features --locked --include-build-script --workspace --test api --lcov '
+        want = ('llvm-cov test --all-features --locked --include-build-script --no-clean --workspace --test api --lcov '
                 '--output-path target/llvm-cov/integration.part0.lcov parse -- --nocapture')
         self.assertEqual(self.log.read_text().splitlines(), [want])
         self.assertIn('cargo ' + want, out.getvalue())
@@ -248,6 +253,393 @@ class Targets(unittest.TestCase):
             self.assertEqual(steps.main(['fresh']), 2)
             self.assertEqual(steps.main(['coverage', 'x']), 2)
         self.assertIn('STEP is test or integration', err.getvalue())
+
+
+class WarmCoverage(StandInCargo):
+    """The coverage build stays warm: a full clean only for the first run or a new fingerprint of the build."""
+
+    def setUp(self):
+        super().setUp()
+        for args in (['init', '-q'], ['config', 'user.name', 'T'], ['config', 'user.email', 't@example.invalid']):
+            subprocess.run(['git', *args], cwd=self.root, check=True)
+        (self.root / '.gitignore').write_text('/target/\n/bin/\n/*.log\n/meta.json\n')
+        for name in ('a', 'b', 'b/inner', 'c'):
+            (self.root / name / 'src').mkdir(parents=True)
+            (self.root / name / 'Cargo.toml').write_text(f'[package]\nname = "{name.replace("/", "-")}"\n')
+            (self.root / name / 'src/lib.rs').write_text('pub fn f() {}\n')
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["a", "b", "b/inner", "c"]\n')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-q', '-m', 'one'], cwd=self.root, check=True)
+        uses = {'a': [], 'b': [], 'b/inner': [{'name': 'a', 'kind': None, 'path': str(self.root / 'a')}],
+                'c': [{'name': 'b-inner', 'kind': 'dev', 'path': str(self.root / 'b/inner')},
+                      {'name': 'serde', 'kind': None}]}
+        packages = [{'name': name.replace('/', '-'), 'id': f'path+file://{self.root / name}#0.1.0',
+                     'manifest_path': str(self.root / name / 'Cargo.toml'), 'dependencies': uses[name],
+                     'targets': [{'name': name.replace('/', '-'), 'kind': ['lib'], 'test': True,
+                                  'src_path': str(self.root / name / 'src/lib.rs')}]}
+                    for name in ('a', 'b', 'b/inner', 'c')]
+        ids = {p['name']: p['id'] for p in packages}
+        # The resolved graph, as cargo metadata gives it without --no-deps. serde is not a member.
+        nodes = [{'id': p['id'], 'deps': [{'pkg': ids.get(d['name'], 'registry+serde'), 'name': d['name']}
+                                          for d in p['dependencies']]} for p in packages]
+        meta = {'packages': packages, 'target_directory': str(self.root / 'target'),
+                'workspace_members': [p['id'] for p in packages], 'resolve': {'nodes': nodes}}
+        (self.root / 'meta.json').write_text(json.dumps(meta))
+        self.meta = meta
+        self.clean_log = self.root / 'clean.log'
+
+    def check(self, **env):
+        """Run the step test, and return its code and the cleans that it asked of cargo."""
+        self.clean_log.unlink(missing_ok=True)
+        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
+            code = steps.run_tests('test', [])
+        return code, self.clean_log.read_text().splitlines() if self.clean_log.exists() else []
+
+    def test_the_tests_run_with_no_clean(self):
+        self.assertIn('--no-clean', steps.COVERAGE)
+        self.check()
+        self.assertTrue(all('--no-clean' in line for line in self.log.read_text().splitlines()))
+
+    def test_the_first_run_cleans_the_workspace_and_the_next_cleans_only_the_profraw_files(self):
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked']))
+
+    def test_each_package_that_holds_a_changed_rust_file_is_cleaned_and_the_others_stay(self):
+        self.check()
+        (self.root / 'b/inner/src/lib.rs').write_text('pub fn g() {}\n')
+        (self.root / 'a/src/new.rs').write_text('pub fn h() {}\n')
+        (self.root / 'b/README.md').write_text('words\n')
+        folder = self.root / 'target/llvm-cov-target'
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked',
+                                            f'clean --locked --target-dir {folder} -p a',
+                                            f'clean --locked --target-dir {folder} -p b-inner',
+                                            f'clean --locked --target-dir {folder} -p c']))
+
+    def test_each_package_that_depends_on_a_changed_one_is_cleaned_too(self):
+        """Its binaries hold the old code of the changed package, and llvm-cov may take their counts."""
+        self.check()
+        (self.root / 'a/src/lib.rs').write_text('pub fn g() {}\n')
+        folder = self.root / 'target/llvm-cov-target'
+        self.assertEqual(self.check()[1], ['llvm-cov clean --profraw-only --locked',
+                                           f'clean --locked --target-dir {folder} -p a',
+                                           f'clean --locked --target-dir {folder} -p b-inner',
+                                           f'clean --locked --target-dir {folder} -p c'])
+        (self.root / 'a/src/lib.rs').write_text('pub fn f() {}\n')
+        (self.root / 'c/src/lib.rs').write_text('pub fn g() {}\n')
+        self.assertEqual(self.check()[1], ['llvm-cov clean --profraw-only --locked',
+                                           f'clean --locked --target-dir {folder} -p c'])
+
+    def test_a_changed_file_in_the_dep_info_of_another_crate_cleans_the_workspace(self):
+        """A crate that compiles the file through #[path] or include! does not depend on its package."""
+        self.check()
+        (self.root / 'a/src/lib.rs').write_text('pub fn g() {}\n')
+        deps = self.root / 'target/llvm-cov-target/debug/deps'
+        deps.mkdir(parents=True)
+        (deps / 'b-0123.d').write_text(f'{deps}/b-0123: {self.root}/b/src/lib.rs {self.root}/a/src/lib.rs\n\n'
+                                       f'{self.root}/a/src/lib.rs:\n')
+        self.assertEqual(self.check()[1], ['llvm-cov clean --workspace --locked'])
+        (deps / 'b-0123.d').write_text(f'{deps}/b-0123: {self.root}/b/src/lib.rs\n')
+        self.assertEqual(self.check()[1][0], 'llvm-cov clean --profraw-only --locked')
+
+    def test_a_changed_file_that_is_not_rust_in_any_dep_info_cleans_the_workspace(self):
+        """include! can read any file into the code of a crate."""
+        (self.root / 'a/src/table.in').write_text('1\n')
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-q', '-m', 'two'], cwd=self.root, check=True)
+        self.check()
+        deps = self.root / 'target/llvm-cov-target/debug/deps'
+        deps.mkdir(parents=True)
+        (deps / 'a-0123.d').write_text(f'{deps}/a-0123: {self.root}/a/src/lib.rs {self.root}/a/src/table.in\n')
+        self.assertEqual(self.check()[1], ['llvm-cov clean --profraw-only --locked'])
+        (self.root / 'a/src/table.in').write_text('2\n')
+        self.assertEqual(self.check()[1], ['llvm-cov clean --workspace --locked'])
+
+    def test_the_dep_info_reader_takes_the_sources_of_the_output_and_paths_with_spaces(self):
+        info = self.root / 'x.d'
+        info.write_text(f'/t/x: {self.root}/a\\ b.rs {self.root}/c.rs\n\n{self.root}/a\\ b.rs:\n/elsewhere/z.rs:\n')
+        self.assertEqual(steps.dep_info(info), {str(self.root / 'a b.rs'), str(self.root / 'c.rs')})
+
+    def test_a_build_folder_of_its_own_cleans_the_workspace_on_each_run(self):
+        """cargo clean -p would clean another folder than the build of cargo llvm-cov."""
+        full = (0, ['llvm-cov clean --workspace --locked'])
+        moved = {**self.meta, 'build_directory': str(self.root / 'bdir')}
+        (self.root / 'meta.json').write_text(json.dumps(moved))
+        self.assertEqual(self.check(), full)
+        self.assertEqual(self.check(), full)
+        (self.root / 'meta.json').write_text(json.dumps(self.meta))
+        for name in ('CARGO_LLVM_COV_TARGET_DIR', 'CARGO_LLVM_COV_BUILD_DIR'):
+            self.check()
+            self.assertEqual(self.check(**{name: str(self.root / 'elsewhere')}), full)
+
+    def test_a_run_with_extra_arguments_saves_no_fingerprint(self):
+        """An argument such as --config can change the build."""
+        full = (0, ['llvm-cov clean --workspace --locked'])
+        self.clean_log.unlink(missing_ok=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.run_tests('test', ['--config', 'profile.test.debug=0']), 0)
+        self.assertEqual(self.check(), full)
+
+    def test_a_new_fingerprint_of_the_build_cleans_the_workspace(self):
+        """A new name of a test binary leaves the old binary, whose lines would count as lines that no test runs."""
+        full = (0, ['llvm-cov clean --workspace --locked'])
+        self.check()
+        (self.root / 'a/Cargo.toml').write_text('[package]\nname = "a"\nversion = "0.2.0"\n')
+        self.assertEqual(self.check(), full)
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked']))
+        (self.root / 'Cargo.lock').write_text('# new\n')
+        self.assertEqual(self.check(), full)
+        (self.root / '.cargo').mkdir()
+        (self.root / '.cargo/config.toml').write_text('[build]\n')
+        self.assertEqual(self.check(), full)
+        self.assertEqual(self.check(RUSTFLAGS='-C debuginfo=1'), full)
+        self.assertEqual(self.check(RUSTFLAGS='-C debuginfo=1')[1], ['llvm-cov clean --profraw-only --locked'])
+        for name, value in (('CARGO_PROFILE_TEST_DEBUG', '0'), ('CARGO_INCREMENTAL', '0'),
+                            ('CARGO_BUILD_RUSTFLAGS', '-C opt-level=1')):
+            self.assertEqual(self.check(RUSTFLAGS='-C debuginfo=1', **{name: value}), full, name)
+        (self.root / '.gitignore').write_text('/target/\n/bin/\n/*.log\n/meta.json\n/.cargo/\n')
+        self.check()
+        (self.root / '.cargo/config.toml').write_text('[build]\nincremental = false\n')
+        self.assertEqual(self.check(), full)
+
+    def test_the_fingerprint_is_saved_only_after_a_run_passes(self):
+        """cargo llvm-cov clean exits with 0 even when its cargo clean fails, so only a passed run proves the clean."""
+        full = (0, ['llvm-cov clean --workspace --locked'])
+        code, cleans = self.check(CODE='101', CLEAN_CODE='0')
+        self.assertEqual((code, cleans), (101, ['llvm-cov clean --workspace --locked']))
+        self.assertEqual(self.check(), full)
+
+    def test_a_failed_clean_of_a_package_stops_the_run_and_forgets_the_fingerprint(self):
+        self.check()
+        (self.root / 'a/src/lib.rs').write_text('pub fn g() {}\n')
+        code, cleans = self.check(CLEAN_CODE='101')
+        self.assertEqual((code, cleans), (101, ['llvm-cov clean --profraw-only --locked']))
+        self.assertFalse(self.log.read_text().count('--lcov') > 1)
+        self.assertEqual(self.check()[1], ['llvm-cov clean --workspace --locked'])
+
+    def test_with_no_parent_commit_each_run_cleans_the_workspace(self):
+        subprocess.run(['git', 'update-ref', '-d', 'HEAD'], cwd=self.root, check=True)
+        self.check()
+        self.assertEqual(self.check()[1], ['llvm-cov clean --workspace --locked'])
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo'), 'needs cargo llvm-cov')
+class WarmCoverageCargo(unittest.TestCase):
+    """The real cargo llvm-cov: a warm run compiles nothing, and a new version leaves no line of an old binary."""
+
+    def test_a_new_version_of_a_package_leaves_no_line_of_the_old_test_binary(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn add(a: u32) -> u32 { a + 1 }\npub fn more(a: u32) -> u32 { a * 2 }\n'
+                                         '#[cfg(test)]\nmod t { #[test] fn a() { assert_eq!(super::add(1), 2); } }\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        old = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, old)
+
+        def run():
+            """Clean as the step does, run the tests with coverage, and give the stderr and the lines of the report."""
+            with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
+                code, save = steps.clean_coverage_build()
+                self.assertEqual(code, 0)
+                done = subprocess.run([*steps.COVERAGE, '--lcov', '--output-path', 'r.lcov'], capture_output=True,
+                                      text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                save()
+            return done.stderr, sorted(line for line in Path('r.lcov').read_text().splitlines()
+                                       if line.startswith('DA:'))
+        _, first = run()
+        err, again = run()
+        self.assertNotIn('Compiling w', err)
+        self.assertEqual(again, first)
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.2.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn add(a: u32) -> u32 { a + 1 }\n'
+                                         '#[cfg(test)]\nmod t { #[test] fn a() { assert_eq!(super::add(1), 2); } }\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        # Committed, so no changed file cleans the package: only the new fingerprint of the build can.
+        for args in (['add', '-A'], ['commit', '-q', '-m', 'two']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        err, after = run()
+        self.assertIn('Compiling w', err)
+        self.assertNotIn('DA:2,0', after)
+        self.assertNotIn('DA:4,0', after)
+
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo'), 'needs cargo llvm-cov')
+class WarmCoverageSteps(unittest.TestCase):
+    """run_tests with the real cargo llvm-cov and the real wrapper of the evidence, in a workspace of two packages.
+
+    The package c depends on b, and its integration test calls b. The step test builds no integration binary.
+    """
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = root = Path(os.path.realpath(temp.name))
+        (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["b", "c"]\nresolver = "2"\n')
+        for name in ('b', 'c'):
+            (root / name / 'src').mkdir(parents=True)
+        (root / 'b/Cargo.toml').write_text('[package]\nname = "b"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'b/src/lib.rs').write_text('pub fn h() -> u32 {\n    1\n}\n#[cfg(test)]\nmod t {\n    #[test]\n'
+                                           '    fn x() {\n        assert_eq!(super::h(), 1);\n    }\n}\n')
+        (root / 'c/Cargo.toml').write_text('[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                           '[dependencies]\nb = { path = "../b" }\n')
+        (root / 'c/src/lib.rs').write_text('pub fn c() -> u32 { b::h() }\n#[cfg(test)]\n'
+                                           'mod t { #[test] fn x() { assert_eq!(super::c(), 1); } }\n')
+        (root / 'c/tests').mkdir()
+        (root / 'c/tests/api.rs').write_text('#[test]\nfn api() { assert_eq!(b::h(), 1); }\n')
+        (root / '.gitignore').write_text('/target/\n')
+        self.env = env = {k: v for k, v in os.environ.items()
+                          if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR', 'CARGO_BUILD_BUILD_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        old = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, old)
+
+    def step(self, name):
+        """Run the step NAME, and return its code, the lines of b/src/lib.rs in its report, and its evidence."""
+        with mock.patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = steps.run_tests(name, [])
+        lines, inside = {}, False
+        for line in steps.report(name).read_text().splitlines():
+            if line.startswith('SF:'):
+                inside = line.endswith('b/src/lib.rs')
+            elif inside and line.startswith('DA:'):
+                number, count = line[3:].split(',')[:2]
+                lines[int(number)] = max(lines.get(int(number), 0), int(count))
+        sources = json.loads((steps.REPORTS / f'{name}.modules.json').read_text())['sources']
+        return code, lines, sources
+
+    def test_an_old_binary_of_a_dependent_package_gives_no_count_to_a_new_line(self):
+        """Before the fix, the old integration binary of c held h at line 1, and llvm-cov took its count."""
+        self.assertEqual(self.step('test')[0], 0)
+        self.assertEqual(self.step('integration')[0], 0)
+        text = (self.root / 'b/src/lib.rs').read_text()
+        (self.root / 'b/src/lib.rs').write_text('pub fn bad(x: u32) -> u32 { if x > 5 { x * 2 } else { x + 3 } }\n'
+                                                 + text)
+        code, lines, _ = self.step('test')
+        self.assertEqual(code, 0)
+        self.assertEqual(lines[1], 0)
+
+    def commit(self):
+        for args in (['add', '-A'], ['commit', '-q', '-m', 'more']):
+            subprocess.run(['git', *args], cwd=self.root, env=self.env, check=True, capture_output=True)
+
+    def lock(self):
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=self.root, env=self.env, check=True,
+                       capture_output=True)
+
+    def break_b(self):
+        """Run test and integration, then add an untested line at the top of b, and return line 1 of the step test."""
+        self.commit()
+        self.assertEqual(self.step('test')[0], 0)
+        self.assertEqual(self.step('integration')[0], 0)
+        text = (self.root / 'b/src/lib.rs').read_text()
+        (self.root / 'b/src/lib.rs').write_text('pub fn bad(x: u32) -> u32 { if x > 5 { x * 2 } else { x + 3 } }\n'
+                                                 + text)
+        code, lines, _ = self.step('test')
+        self.assertEqual(code, 0)
+        return lines[1]
+
+    def test_a_dependent_through_a_path_crate_outside_the_workspace_is_cleaned(self):
+        """c depends on ext, which is not a member, and ext depends on b. Only the resolved graph shows it."""
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["b", "c"]\nexclude = ["ext"]\n'
+                                              'resolver = "2"\n')
+        (self.root / 'ext/src').mkdir(parents=True)
+        (self.root / 'ext/Cargo.toml').write_text('[package]\nname = "ext"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                                  '[dependencies]\nb = { path = "../b" }\n')
+        (self.root / 'ext/src/lib.rs').write_text('pub fn e() -> u32 { b::h() }\n')
+        (self.root / 'c/Cargo.toml').write_text('[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                                '[dependencies]\next = { path = "../ext" }\n')
+        (self.root / 'c/src/lib.rs').write_text('pub fn c() -> u32 { ext::e() }\n#[cfg(test)]\n'
+                                                'mod t { #[test] fn x() { assert_eq!(super::c(), 1); } }\n')
+        (self.root / 'c/tests/api.rs').write_text('#[test]\nfn api() { assert_eq!(ext::e(), 1); }\n')
+        self.lock()
+        self.assertEqual(self.break_b(), 0)
+
+    def test_a_dependent_through_an_optional_dependency_is_cleaned(self):
+        """The tests run with every feature, so an optional dependency links b too."""
+        (self.root / 'c/Cargo.toml').write_text('[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                                '[dependencies]\nb = { path = "../b", optional = true }\n')
+        (self.root / 'c/src/lib.rs').write_text('#[cfg(feature = "b")]\npub fn c() -> u32 { b::h() }\n#[cfg(test)]\n'
+                                                'mod t {\n    #[cfg(feature = "b")]\n    #[test]\n'
+                                                '    fn x() { assert_eq!(super::c(), 1); }\n}\n')
+        (self.root / 'c/tests/api.rs').write_text('#![cfg(feature = "b")]\n'
+                                                  '#[test]\nfn api() { assert_eq!(b::h(), 1); }\n')
+        self.lock()
+        self.assertEqual(self.break_b(), 0)
+
+    def test_a_dependent_through_a_patch_is_cleaned(self):
+        """c asks for b from the registry, and [patch] gives it the member b."""
+        text = (self.root / 'Cargo.toml').read_text()
+        (self.root / 'Cargo.toml').write_text(text + '\n[patch.crates-io]\nb = { path = "b" }\n')
+        (self.root / 'c/Cargo.toml').write_text('[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                                '[dependencies]\nb = "0.1"\n')
+        self.lock()
+        self.assertEqual(self.break_b(), 0)
+
+    def test_a_file_that_another_crate_takes_in_through_path_cleans_the_workspace(self):
+        """c compiles b/src/x.rs as a module of its own, so it does not depend on b for that code."""
+        (self.root / 'b/src/x.rs').write_text('pub fn x() -> u32 {\n    7\n}\n')
+        # c does not depend on b, so only the dep-info file of c shows that it compiles the file. d depends on c
+        # and runs its copy of x, so an old binary of c with the same symbol could give x its counts.
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["b", "c", "d"]\nresolver = "2"\n')
+        (self.root / 'c/Cargo.toml').write_text('[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n')
+        (self.root / 'c/src/lib.rs').write_text('#[path = "../../b/src/x.rs"]\npub mod x;\n')
+        (self.root / 'd/src').mkdir(parents=True)
+        (self.root / 'd/Cargo.toml').write_text('[package]\nname = "d"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                                                '[dependencies]\nc = { path = "../c" }\n')
+        (self.root / 'd/src/lib.rs').write_text('#[cfg(test)]\n'
+                                                'mod t { #[test] fn x() { assert_eq!(c::x::x(), 7); } }\n')
+        self.lock()
+        (self.root / 'c/tests/api.rs').write_text('#[test]\nfn api() { assert_eq!(c::x::x(), 7); }\n')
+        self.commit()
+        self.assertEqual(self.step('test')[0], 0)
+        self.assertEqual(self.step('integration')[0], 0)
+        (self.root / 'b/src/x.rs').write_text('pub fn bad(x: u32) -> u32 { if x > 5 { x * 2 } else { x + 3 } }\n'
+                                              'pub fn x() -> u32 {\n    7\n}\n')
+        self.assertEqual(self.step('test')[0], 0)
+        lines, inside = {}, False
+        for line in steps.report('test').read_text().splitlines():
+            if line.startswith('SF:'):
+                inside = line.endswith('b/src/x.rs')
+            elif inside and line.startswith('DA:'):
+                number, count = line[3:].split(',')[:2]
+                lines[int(number)] = max(lines.get(int(number), 0), int(count))
+        self.assertEqual(lines.get(1, 0), 0)
+
+    def test_a_changed_file_that_did_not_change_since_the_last_run_is_compiled_again(self):
+        """The evidence needs rustc to run on the file in this run, so its package is cleaned on each run."""
+        (self.root / 'b/src/lib.rs').write_text((self.root / 'b/src/lib.rs').read_text() + '// changed\n')
+        for _ in range(2):
+            code, _, sources = self.step('test')
+            self.assertEqual(code, 0)
+            self.assertTrue(any(path.endswith('b/src/lib.rs') for path in sources), sources)
+
+    def test_with_a_build_folder_of_its_own_the_changed_file_is_still_compiled_again(self):
+        """With build.build-dir, cargo clean -p would clean another folder, so each run cleans the whole workspace."""
+        (self.root / '.cargo').mkdir()
+        (self.root / '.cargo/config.toml').write_text('[build]\nbuild-dir = "bdir"\n')
+        (self.root / '.gitignore').write_text('/target/\n/bdir/\n')
+        (self.root / 'b/src/lib.rs').write_text((self.root / 'b/src/lib.rs').read_text() + '// changed\n')
+        for _ in range(2):
+            code, _, sources = self.step('test')
+            self.assertEqual(code, 0)
+            self.assertTrue(any(path.endswith('b/src/lib.rs') for path in sources), sources)
 
 
 class Repository(unittest.TestCase):

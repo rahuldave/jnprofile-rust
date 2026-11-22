@@ -65,6 +65,20 @@ Such a path whose name holds a `\` stops the step. `diff-cover` reads each `\` a
 
 The step merges the report of `test` and that of `integration` into one report, and gives it to `diff-cover`. A line that one of them runs passes. A line that one report measures and no report runs fails, also when the other report does not measure it, as for code under `#[cfg(not(test))]`. It reads each report only for the same run ID and the same worktree tree.
 
+The build of the coverage run stays warm between checks. Cargo compiles again only what the change needs:
+
+- Before each run, the step removes the `.profraw` files of the last run. So a count from an old run, such as that of a deleted test, never counts.
+- The step cleans each workspace package that holds a changed Rust file, so the compiler runs on that file and gives its module evidence. It also cleans each workspace package that depends on such a package. A test binary holds the code of each package that it depends on. The step `test` does not build the integration tests again. Their old binaries would keep the old code, and `llvm-cov` could take their counts for the new lines. The dependencies come from the resolved graph of `cargo metadata`, so a path crate outside the workspace and a `[patch]` count too. The others stay as they are.
+- A crate outside those packages may compile a changed file, through `#[path]` or `include!`. Its dep-info file, which `rustc` writes beside the build, then lists the file, and the step cleans the whole workspace. A changed file that is not Rust code, but that a dep-info file lists, cleans the whole workspace too. So does a failed `cargo metadata`.
+- The step cleans the whole workspace on the first run, with no parent commit, and when the fingerprint of the build changes. The fingerprint holds these:
+  - the versions of `rustc` and `cargo llvm-cov`;
+  - each variable whose name starts with `CARGO` or `RUST`;
+  - each `Cargo.toml` and `Cargo.lock`, `rust-toolchain` and the cargo config. A change of one can give each test binary a new name, and the old binary would stay beside the new one. Its lines would then count as lines that no test runs.
+- A build may have a folder of its own, from `build.build-dir`, `CARGO_LLVM_COV_TARGET_DIR` or `CARGO_LLVM_COV_BUILD_DIR`. Then the step cleans the whole workspace on each run.
+- The dependency builds stay in each case.
+
+The step saves the fingerprint in `target/llvm-cov-target` after a run passes. A failed run leaves no fingerprint, and the next run cleans the whole workspace. So does a run with extra arguments, such as `--config`.
+
 On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step checks each line of the merged report, and it names each line that no test runs.
 
 The report of `integration` counts only when `integration` is in the steps of `just check`. The installer of jnterfaces writes those steps into the key `steps` of `.agents/stack.json`. The setup answer that runs `integration` only in `just verify` takes it out of that list. Then a line that only an integration test runs fails `coverage-check`. Give it a unit test, or exclude its file. With no `.agents/stack.json`, the report counts, as the spec says by default.
@@ -75,7 +89,7 @@ So `coverage-check` also fails on each changed `.rs` file that is not in the rep
 
 The declaration check parses the whole current file with tree-sitter 0.25.2 and its Rust grammar 0.24.0. It accepts imports, modules and type declarations, including empty files. It rejects handwritten functions, impls, initializers, macros, syntax errors and unknown syntax or attributes. It accepts only the exact `#[cfg(test)]` marker on modules and imports, and `#[allow(unused_imports)]` on imports. Parser or file errors retain the missing-file failure.
 
-The step also needs module evidence from a successful compiler call in the current test run. It cleans workspace coverage artifacts before testing, preserves dependency builds, and records fresh compiler dependencies with source hashes. A module path from that compiler target must reach the file. The path may use plain module declarations or exact `#[cfg(test)]` module declarations when the compiler call has `--test`. Other conditional or attributed module paths and files read only as data do not qualify.
+The step also needs module evidence from a successful compiler call in the current test run. It records fresh compiler dependencies with source hashes. A module path from that compiler target must reach the file. The path may use plain module declarations or exact `#[cfg(test)]` module declarations when the compiler call has `--test`. Other conditional or attributed module paths and files read only as data do not qualify.
 
 A pre-existing compiler wrapper still runs, but cannot supply module evidence because it may return cached output. The run, worktree and source hashes must still match. Each accepted absent file prints its category and module evidence; it has no authored executable source to measure. An LCOV record with a zero count still fails under the usual rules.
 
