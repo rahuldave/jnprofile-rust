@@ -103,6 +103,68 @@ class Site(unittest.TestCase):
         for font in re.findall(r'url\(["\']?fonts/([^"\')]+)', css):
             self.assertTrue((theme / 'fonts' / font).is_file(), font)
 
+class Quick(unittest.TestCase):
+    """just rust::quick runs the checks of the installed tools, without coverage, in the layout of the installer."""
+
+    def project(self, tools):
+        """A scratch project with rust.just, base.just and the recipe files of TOOLS, and a stand-in cargo."""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        module = root / '.agents/just'
+        (module / 'rust').mkdir(parents=True)
+        imports = ''.join(f"import? 'rust/{name}.just'\n" for name in ['base', *tools])
+        (module / 'rust.just').write_text("set positional-arguments\nset working-directory := '../..'\n" + imports)
+        for name in ['base', *tools]:
+            shutil.copy(REPO / f'.agents/just/rust/{name}.just', module / 'rust' / f'{name}.just')
+        for name in ('steps.py', 'api_rule.py', 'compiler_evidence.py'):
+            if (REPO / '.agents/just/rust' / name).exists():
+                shutil.copy(REPO / '.agents/just/rust' / name, module / 'rust' / name)
+        (root / 'meta.json').write_text(json.dumps({'packages': [{'name': 'p', 'id': 'p', 'targets': [
+            {'name': 'p', 'kind': ['lib'], 'test': True}, {'name': 'app', 'kind': ['bin'], 'test': True}]}]}))
+        (root / 'Justfile').write_text("mod rust '.agents/just/rust.just'\n")
+        (root / 'bin').mkdir()
+        (root / 'bin/cargo').write_text('#!/bin/sh\nif [ "$1" = metadata ]; then cat "$CARGO_META"; exit 0; fi\n'
+                                        'printf "%s\\n" "$*" >> "$CARGO_LOG"\nexit "${CARGO_CODE:-0}"\n')
+        (root / 'bin/cargo').chmod(0o755)
+        return root
+
+    def quick(self, root, *args, code='0'):
+        env = dict(os.environ, PATH=f'{root / "bin"}{os.pathsep}{os.environ["PATH"]}', CARGO_LOG=str(root / 'log'),
+                   CARGO_CODE=code, CARGO_META=str(root / 'meta.json'))
+        done = subprocess.run(['just', 'rust::quick', *args], cwd=root, env=env, capture_output=True, text=True)
+        log = root / 'log'
+        return done.returncode, log.read_text().splitlines() if log.exists() else []
+
+    def test_quick_runs_the_checks_of_each_installed_tool_and_the_unit_tests(self):
+        root = self.project(['lint', 'typecheck', 'test'])
+        self.assertEqual(self.quick(root, 'parse'), (0, [
+            'fmt --all --check',
+            'clippy --workspace --all-targets --all-features --locked -- -D warnings',
+            'check --workspace --all-targets --all-features --locked',
+            'test --all-features --locked --workspace --lib --bin app parse']))
+
+    def test_quick_leaves_out_the_checks_of_a_tool_that_is_not_installed(self):
+        self.assertEqual(self.quick(self.project(['typecheck']))[1],
+                         ['check --workspace --all-targets --all-features --locked'])
+        self.assertEqual(self.quick(self.project([])), (0, []))
+
+    def test_quick_stops_at_the_first_check_that_fails(self):
+        code, log = self.quick(self.project(['lint', 'typecheck', 'test']), code='101')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(log, ['fmt --all --check'])
+
+    def test_quick_runs_the_same_commands_as_the_recipes_of_the_tools(self):
+        """quick copies the commands of fmt-check, lint and typecheck, so a change of one must change quick too."""
+        quick = (REPO / '.agents/just/rust/base.just').read_text()
+        for name, recipe in (('lint', 'fmt-check'), ('lint', 'lint'), ('typecheck', 'typecheck')):
+            text = (REPO / f'.agents/just/rust/{name}.just').read_text()
+            body = re.search(rf'^{re.escape(recipe)}( \*args)?:\n((?:    .*\n)+)', text, re.M).group(2)
+            self.assertEqual(len(body.splitlines()), 1, recipe)
+            command = body.strip().replace(' "$@"', '')
+            self.assertRegex(quick, rf'(then|&&) {re.escape(command)}( &&|;)', recipe)
+
+
 class Release(unittest.TestCase):
     """just release passes its words to the script, so just release --dry-run makes no tag."""
 

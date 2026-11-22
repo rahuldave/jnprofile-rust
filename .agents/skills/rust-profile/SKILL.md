@@ -21,7 +21,7 @@ first.
 
 | Tool | Recipes | What the steps check |
 |---|---|---|
-| none, always there | `setup`, `build`, `version` | nothing |
+| none, always there | `setup`, `build`, `version`, `quick` | nothing; `quick` runs the checks of the installed tools in a fix round, with no coverage |
 | `lint` | `fmt`, `fmt-check`, `lint` | the format with rustfmt, and each clippy warning as an error |
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
 | `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
@@ -81,6 +81,7 @@ does not.
   `api-prose-check`, which checks the API page of each changed file with the
   checker of nossaifd. smalldocs needs the nightly toolchain
   `nightly-2026-11-12`, which `just install api` installs.
+- **`quick [ARGS...]`** runs `fmt-check`, `lint`, `typecheck` and the unit tests with a plain `cargo test`, on the targets of `just test`, each only when its tool is installed. It measures no coverage, so its build stays warm. Use it in a fix round, and run `just check` once on the final tree.
 - **`test-paths [PATH...]`** runs the tests of some files with `cargo test`.
   A file `tests/NAME.rs` runs the test target `NAME`. Any other file in the
   folder `tests` runs every test target of that folder. `test-parent` gives
