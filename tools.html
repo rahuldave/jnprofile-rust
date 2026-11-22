@@ -22,6 +22,10 @@
 <td>Builds every package of the workspace. Extra arguments go to cargo: <code>just build --release</code></td>
 </tr>
 <tr>
+<td><code>just rust::quick</code></td>
+<td>Runs the quick checks of a fix round, with no coverage: <code>fmt-check</code>, <code>lint</code>, <code>typecheck</code>, and the unit tests with a plain <code>cargo test</code>. The tests take the same targets as <code>just test</code>, so a project with only a binary works. Each check runs only when its tool is installed, and the first that fails stops the rest. Extra arguments go to <code>cargo test</code>. Arguments that choose packages or targets, such as <code>-p core</code> or <code>--test api</code>, take the place of the targets: <code>just rust::quick -p core</code>. The installer also gives the project <code>just quick</code>, which runs it in each profile that has it. It is not a step of <code>just check</code>, so run <code>just check</code> once on the final tree</td>
+</tr>
+<tr>
 <td><code>just version</code></td>
 <td>Prints the version of the project, <code>X.Y.Z</code>, from <code>[package]</code> or <code>[workspace.package]</code> of the root <code>Cargo.toml</code>, for the release tag. It prints nothing when there is none. It exits with 2 when the file cannot be read, or when the version is not semver. It is not a step of <code>just check</code></td>
 </tr>
