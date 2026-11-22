@@ -75,12 +75,12 @@ WORK = Path('target/jnprofile-rust')
 # The folder of the run of api-prose-check, as .jnprofile-python and .jnprofile-typescript of the other profiles. The
 # tool api adds it to .gitignore and .worktreedisposable.
 API_WORK = Path('.jnprofile-rust')
-SMALLDOCS = 'smalldocs==0.5.12'
+SMALLDOCS = 'smalldocs==0.5.13'
 # The start of each uv run of the steps. smalldocs needs Python 3.11 or later, and uv may pick an older Python when
 # none is named, as on a machine whose python3 is 3.9 or with UV_PYTHON set. The recipes name the same version.
 UV_RUN = ['uv', 'run', '--no-project', '--quiet', '--python', '>=3.11']
 DOCS_CONFIG = Path('docs/_smalldocs.yml')
-# The nightly toolchain that runs rustdoc for smalldocs, which needs -Z unstable-options. smalldocs 0.5.12 reads
+# The nightly toolchain that runs rustdoc for smalldocs, which needs -Z unstable-options. smalldocs 0.5.13 reads
 # only the formats 57 and 61 of the JSON of rustdoc, so the date is fixed. The program nightly of profile.json
 # installs the same toolchain.
 NIGHTLY = 'nightly-2026-11-12'

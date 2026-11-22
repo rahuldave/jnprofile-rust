@@ -165,7 +165,7 @@ The step also passes `--cap-lints warn`. So a crate that sets `#![deny(missing_d
 
 The recipes have the names and the form of the `api` tools of the Python and TypeScript profiles. The step `docs-check` of the docs role runs `api-check`, and so does `just verify`.
 
-`api-check` runs `smalldocs api check` of smalldocs 0.5.12 with `uv`. smalldocs reads the API with `cargo +nightly-2026-11-12 rustdoc`, which writes the JSON format 61. smalldocs reads only the formats 57 and 61, so the profile pins the date. The program `nightly` of the tool installs that toolchain with `rustup toolchain install nightly-2026-11-12 --profile minimal`. Its check is `rustup run nightly-2026-11-12 rustc --version`, which never downloads a toolchain. `rustup toolchain list` and `rustup show active-toolchain` would install a missing pin of the project.
+`api-check` runs `smalldocs api check` of smalldocs 0.5.13 with `uv`. smalldocs reads the API with `cargo +nightly-2026-11-12 rustdoc`, which writes the JSON format 61. smalldocs reads only the formats 57 and 61, so the profile pins the date. The program `nightly` of the tool installs that toolchain with `rustup toolchain install nightly-2026-11-12 --profile minimal`. Its check is `rustup run nightly-2026-11-12 rustc --version`, which never downloads a toolchain. `rustup toolchain list` and `rustup show active-toolchain` would install a missing pin of the project.
 
 The step fails on three things:
 

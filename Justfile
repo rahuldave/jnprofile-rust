@@ -50,7 +50,7 @@ release-check:
     {{release_tag}} --check
 
 # The documentation site, from docs/, with smalldocs.
-smalldocs := "uvx --quiet smalldocs@0.5.12"
+smalldocs := "uvx --quiet smalldocs@0.5.13"
 
 # Check the site: broken links, and options that smalldocs ignores
 docs-check:
