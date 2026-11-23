@@ -530,6 +530,97 @@ class QuickTestCargo(unittest.TestCase):
         self.assertIn('unit_ran', done.stdout)
 
 
+class Launcher(unittest.TestCase):
+    """The RUSTC_WRAPPER of the coverage steps runs no shell, so each variable of cargo reaches rustc."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(os.path.realpath(temp.name))
+        self.helper = self.root / 'helper.py'
+        self.helper.write_text('import json, os, sys\nprint(json.dumps([os.environ.get("CARGO_BIN_EXE_my-tool"), '
+                               'sys.argv]))\n')
+
+    def run_launcher(self, launcher):
+        env = dict(os.environ, **{'CARGO_BIN_EXE_my-tool': '/x/my-tool'})
+        done = subprocess.run([str(launcher), 'rustc', 'a b', '--crate-name', 't'], env=env, capture_output=True,
+                              text=True, check=True)
+        return json.loads(done.stdout)
+
+    def test_a_variable_whose_name_has_a_hyphen_reaches_the_helper(self):
+        """dash, the /bin/sh of Ubuntu, drops such a variable, and env! of a test then fails to compile."""
+        launcher = steps.write_launcher(self.root / 'rustc-wrapper', self.helper)
+        self.assertEqual(self.run_launcher(launcher), ['/x/my-tool', [str(self.helper), 'rustc', 'a b', '--crate-name',
+                                                                      't']])
+        interpreter = launcher.read_text().splitlines()[0][2:]
+        self.assertEqual(os.path.realpath(interpreter), os.path.realpath(sys.executable))
+
+    def test_the_launcher_through_a_link_keeps_the_modules_of_this_python(self):
+        """steps.py runs in a virtual environment of uv with tree-sitter, which a Python started from a link loses."""
+        (self.root / 'only').mkdir()
+        (self.root / 'only/onlyhere.py').write_text('NAME = "here"\n')
+        self.helper.write_text('import onlyhere\nprint(onlyhere.NAME)\n')
+        spaced = self.root / 'a python' / 'python'
+        spaced.parent.mkdir()
+        spaced.symlink_to(os.path.realpath(sys.executable))
+        with mock.patch.object(sys, 'executable', str(spaced)), \
+                mock.patch.object(sys, 'path', [sys.path[0], str(self.root / 'only'), *sys.path[1:]]):
+            launcher = steps.write_launcher(self.root / 'rustc-wrapper', self.helper)
+        env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+        done = subprocess.run([str(launcher)], env=env, capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, 'here'), done.stderr)
+
+    def test_the_launcher_is_utf_8_in_any_locale(self):
+        """Python reads a script as UTF-8, so a helper path with an accent works also in a Latin-1 locale."""
+        helper = self.root / 'josé' / 'helper.py'
+        helper.parent.mkdir()
+        helper.write_text('print("ran")\n')
+        script = ('import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import steps; '
+                  'steps.write_launcher(Path(sys.argv[2]), Path(sys.argv[3]))')
+        env = dict(os.environ, LC_ALL='en_US.ISO8859-1', PYTHONUTF8='0')
+        subprocess.run([sys.executable, '-c', script, str(REPO / '.agents/just/rust'), str(self.root / 'launcher'),
+                        str(helper)], env=env, check=True, capture_output=True)
+        done = subprocess.run([str(self.root / 'launcher')], capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout), (0, 'ran\n'), done.stderr)
+
+    def test_a_python_path_with_a_space_goes_through_a_link(self):
+        spaced = self.root / 'a python' / 'python'
+        spaced.parent.mkdir()
+        spaced.symlink_to(os.path.realpath(sys.executable))
+        with mock.patch.object(sys, 'executable', str(spaced)):
+            launcher = steps.write_launcher(self.root / 'rustc-wrapper', self.helper)
+        self.assertNotIn(' ', launcher.read_text().splitlines()[0])
+        self.assertEqual(self.run_launcher(launcher)[0], '/x/my-tool')
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo'), 'needs cargo llvm-cov')
+class LauncherCargo(unittest.TestCase):
+    """The real integration step: a test reads the path of a binary whose name has a hyphen."""
+
+    def test_env_of_a_binary_with_a_hyphen_compiles_through_the_wrapper(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src/bin').mkdir(parents=True)
+        (root / 'tests').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn one() -> u32 { 1 }\n')
+        (root / 'src/bin/my-tool.rs').write_text('fn main() {}\n')
+        (root / 'tests/it.rs').write_text('#[test]\nfn path() {\n'
+                                          '    assert!(env!("CARGO_BIN_EXE_my-tool").ends_with("my-tool"));\n'
+                                          '    assert_eq!(w::one(), 1);\n}\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration'],
+                              cwd=root, env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+
 class WarmCoverageSteps(unittest.TestCase):
     """run_tests with the real cargo llvm-cov and the real wrapper of the evidence, in a workspace of two packages.
 
