@@ -139,3 +139,6 @@ profile reads a list of files instead:
 - Write a doc comment for each item that you add, and a test for each line.
   Then run `docstring-check` and `coverage-check`, and fix what they list.
 - Do not add `#[allow(missing_docs)]` to pass `docstring-check`. Write the doc.
+- Never set one `CARGO_TARGET_DIR` for several worktrees. A shared folder
+  lets clippy pass code it never read. sccache is the safe way to share
+  compiled dependencies; `docs/tools.md` has its settings.
