@@ -18,9 +18,11 @@ version:
 
 # Run the quick checks of a fix round, without coverage: fmt-check, lint, typecheck, and the unit tests of the
 # libraries and the binaries with a plain cargo test, whose build stays warm. Each runs only when its tool is
-# installed. The tests take the targets of just test. Extra arguments go to cargo test: just rust::quick -p core.
-# Run just check once on the final tree
+# installed: when the module, module_file(), has its recipe. The installer copies every recipe file, so a file alone
+# does not show a tool. The tests take the targets of just test. Extra arguments go to cargo test:
+# just rust::quick -p core. Run just check once on the final tree
 quick *args:
-    if [ -f {{ quote(source_directory() / "lint.just") }} ]; then cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features --locked -- -D warnings; fi
-    if [ -f {{ quote(source_directory() / "typecheck.just") }} ]; then cargo check --workspace --all-targets --all-features --locked; fi
-    if [ -f {{ quote(source_directory() / "test.just") }} ]; then {{rust_py}} {{rust_steps}} quick-test "$@"; fi
+    if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx fmt-check; then {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} fmt-check; fi
+    if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx lint; then {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} lint; fi
+    if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx typecheck; then {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} typecheck; fi
+    if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx test; then {{rust_py}} {{rust_steps}} quick-test "$@"; fi

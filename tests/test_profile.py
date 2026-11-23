@@ -107,7 +107,7 @@ class Quick(unittest.TestCase):
     """just rust::quick runs the checks of the installed tools, without coverage, in the layout of the installer."""
 
     def project(self, tools):
-        """A scratch project with rust.just, base.just and the recipe files of TOOLS, and a stand-in cargo."""
+        """A scratch project with every recipe file, a rust.just that imports base and TOOLS, and a stand-in cargo."""
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -115,8 +115,9 @@ class Quick(unittest.TestCase):
         (module / 'rust').mkdir(parents=True)
         imports = ''.join(f"import? 'rust/{name}.just'\n" for name in ['base', *tools])
         (module / 'rust.just').write_text("set positional-arguments\nset working-directory := '../..'\n" + imports)
-        for name in ['base', *tools]:
-            shutil.copy(REPO / f'.agents/just/rust/{name}.just', module / 'rust' / f'{name}.just')
+        # The installer copies every recipe file of the profile, and imports only those of the installed tools.
+        for recipes in (REPO / '.agents/just/rust').glob('*.just'):
+            shutil.copy(recipes, module / 'rust' / recipes.name)
         for name in ('steps.py', 'api_rule.py', 'compiler_evidence.py'):
             if (REPO / '.agents/just/rust' / name).exists():
                 shutil.copy(REPO / '.agents/just/rust' / name, module / 'rust' / name)
@@ -154,15 +155,11 @@ class Quick(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(log, ['fmt --all --check'])
 
-    def test_quick_runs_the_same_commands_as_the_recipes_of_the_tools(self):
-        """quick copies the commands of fmt-check, lint and typecheck, so a change of one must change quick too."""
-        quick = (REPO / '.agents/just/rust/base.just').read_text()
-        for name, recipe in (('lint', 'fmt-check'), ('lint', 'lint'), ('typecheck', 'typecheck')):
-            text = (REPO / f'.agents/just/rust/{name}.just').read_text()
-            body = re.search(rf'^{re.escape(recipe)}( \*args)?:\n((?:    .*\n)+)', text, re.M).group(2)
-            self.assertEqual(len(body.splitlines()), 1, recipe)
-            command = body.strip().replace(' "$@"', '')
-            self.assertRegex(quick, rf'(then|&&) {re.escape(command)}( &&|;)', recipe)
+    def test_quick_leaves_out_a_tool_whose_recipe_file_is_there_but_not_imported(self):
+        """The installer copies lint.just and typecheck.just also when their tools are not installed."""
+        root = self.project(['test'])
+        self.assertTrue((root / '.agents/just/rust/lint.just').exists())
+        self.assertEqual(self.quick(root), (0, ['test --all-features --locked --workspace --lib --bin app']))
 
 
 class Release(unittest.TestCase):
