@@ -428,6 +428,16 @@ class WarmCoverage(StandInCargo):
         (self.root / '.cargo/config.toml').write_text('[build]\nincremental = false\n')
         self.assertEqual(self.check(), full)
 
+    def test_an_empty_rustc_wrapper_for_coverage_check_costs_two_full_cleans(self):
+        """docs/tools.md tells a user of sccache to run RUSTC_WRAPPER= for a commit of declarations only."""
+        full = (0, ['llvm-cov clean --workspace --locked'])
+        warm = (0, ['llvm-cov clean --profraw-only --locked'])
+        self.check(RUSTC_WRAPPER='sccache')
+        self.assertEqual(self.check(RUSTC_WRAPPER='sccache'), warm)
+        self.assertEqual(self.check(RUSTC_WRAPPER=''), full)
+        self.assertEqual(self.check(RUSTC_WRAPPER='sccache'), full)
+        self.assertEqual(self.check(RUSTC_WRAPPER='sccache'), warm)
+
     def test_the_fingerprint_is_saved_only_after_a_run_passes(self):
         """cargo llvm-cov clean exits with 0 even when its cargo clean fails, so only a passed run proves the clean."""
         full = (0, ['llvm-cov clean --workspace --locked'])

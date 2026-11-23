@@ -204,6 +204,30 @@ The recipes of `coverage-check`, `docstring-check`, `test-paths` and `api-check`
 The api commands run it again under smalldocs, whose PyYAML reads `docs/_smalldocs.yml`. It reads the lists from the parent commit, and it leaves the excluded files out of a copy of the coverage report, in `target/jnprofile-rust/`. It also reads the JSON messages of clippy, and prints each item with no doc. `coverage-check` runs `diff-cover` 11.0.1 with `uv run --with`.
 
 
+## Builds shared between worktrees
+
+A worktree is a second checkout of the same repository in another folder. Each worktree builds into its own `target/` folder, so a build of one never touches another.
+
+**Never point `CARGO_TARGET_DIR` at one folder for several worktrees.** cargo keeps one record of each crate, and two worktrees of the same package write the same record. cargo calls a crate up to date when its files are older than the build in the record. On Gossil, a project that used the profile, clippy then reported a pass for code it never read. The record held the build of the other worktree. The steps of the profile trust the record of cargo, so a shared folder can pass a check that a clean build fails.
+
+**sccache is optional and safe.** sccache is a cache of compiler outputs, keyed by the source, the flags and the compiler. A changed file or flag gives a new key. To use it, set these variables in the shell:
+
+| Variable | Value | Why |
+|---|---|---|
+| `RUSTC_WRAPPER` | `sccache` | cargo runs each `rustc` call through sccache |
+| `CC` | `sccache cc` | the C code of build scripts, such as that of a `-sys` crate, goes through sccache too |
+| `SCCACHE_IDLE_TIMEOUT` | `0` | the sccache server stays up between checks, so the next check finds it warm |
+
+What it shares, in our measurement with sccache 0.19:
+
+- **Dependencies.** A crate from the registry or from git has the same path in each worktree, so it gets the same key. A new worktree, or a clean build, takes those dependencies from the cache.
+- **Not the crates of the workspace.** Their path differs in each worktree, so each worktree gets keys of its own. `SCCACHE_BASEDIRS`, a list of folders joined by `:` that sccache drops from paths, shared no crate of the workspace and no C file in our measurement, so the profile leaves it out.
+- **Not an incremental build.** sccache does not cache a crate that cargo builds incrementally. The dev and test profiles of cargo build each local crate that way, which means each crate of the workspace and each path dependency.
+
+The cache has one cost for `coverage-check`. A changed `.rs` file with only declarations passes only with module evidence from a `rustc` that ran. A wrapper may return a cached output instead. So with `RUSTC_WRAPPER` or `RUSTC_WORKSPACE_WRAPPER` set, the step takes no module evidence, and such a file fails.
+
+Run `RUSTC_WRAPPER= just coverage-check` for that commit, where an empty value counts as unset. The build fingerprint holds the value of `RUSTC_WRAPPER`, so the workaround costs two full cleans of the workspace. One is this run, and the other is the next run with sccache. The dependencies stay built in both.
+
 ## Recommendations
 
 Prefer tests for reachable Rust code. Run `just coverage-check`, inspect each declaration category, and keep tests for generated parsers and named callbacks.
