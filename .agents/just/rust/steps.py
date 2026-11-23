@@ -451,6 +451,29 @@ def merge_lcov(texts):
                    + 'end_of_record\n' for path, lines in sorted(counts.items()))
 
 
+def write_launcher(launcher, helper):
+    """Write LAUNCHER, an executable for RUSTC_WRAPPER that runs the Python script HELPER with this Python.
+
+    The launcher is a Python script, so no shell runs between cargo and rustc. A shell can drop a variable whose name
+    is not a name of the shell: dash, the /bin/sh of Ubuntu, drops CARGO_BIN_EXE_my-tool, and env! of a test then
+    fails to compile. The first line names this Python. A path with a space, or one too long for that line, goes
+    through a link in a new temporary folder, and the launcher sets the module path of this Python, since a Python
+    started through a link finds no virtual environment. Returns LAUNCHER.
+    """
+    python = sys.executable
+    if any(c.isspace() for c in python) or len(python) > 120:
+        link = Path(tempfile.mkdtemp(prefix='jnprofile-rust-')) / 'python'
+        link.symlink_to(python)
+        python = str(link)
+    # A Python started through the link finds no virtual environment, so the launcher sets the path of this one.
+    path = [str(helper.parent), *sys.path[1:]]
+    launcher.write_text(f'#!{python}\nimport runpy\nimport sys\n\nsys.path[:] = {path!r}\n'
+                        f'sys.argv[0] = {str(helper)!r}\nrunpy.run_path(sys.argv[0], run_name="__main__")\n',
+                        encoding='utf-8')
+    launcher.chmod(0o755)
+    return launcher
+
+
 def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
@@ -484,10 +507,7 @@ def run_tests(step, args):
         return code
     evidence = (REPORTS / (step + '.compiler-' + uuid.uuid4().hex)).resolve()
     evidence.mkdir()
-    launcher = evidence / 'rustc-wrapper'
-    helper = Path(__file__).with_name('compiler_evidence.py').resolve()
-    launcher.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + ' "$@"\n')
-    launcher.chmod(0o755)
+    launcher = write_launcher(evidence / 'rustc-wrapper', Path(__file__).with_name('compiler_evidence.py').resolve())
     env = dict(os.environ, RUSTC_WRAPPER=str(launcher), JNPROFILE_SOURCE_ROOT=str(top()),
                JNPROFILE_COMPILER_EVIDENCE=str(evidence),
                JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
