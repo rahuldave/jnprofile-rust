@@ -1,8 +1,9 @@
 """The lab of the rust profile: install it into a temporary Cargo project and run its steps.
 
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
-SKILL_PACKAGES_DIR/jnterfaces, else in ../jnterfaces next to this repository. BASE has the rust entry of jnterfaces#34,
-the programs of jnterfaces#39, the order of #52, and the version floors of #57 and jlog v0.3.0 of #62. The fixed commit
+SKILL_PACKAGES_DIR/jnterfaces, else in jnterfaces next to the main clone of this repository, also from a worktree.
+BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39, the order of #52, and the version floors of
+#57 and jlog v0.3.0 of #62. The fixed commit
 keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
 tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that
@@ -19,15 +20,29 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'lab'))
 import ci_programs  # noqa: E402
+
+
+def main_clone(repo):
+    """The folder of the main clone of the git repository at REPO, which is REPO itself unless REPO is a worktree."""
+    try:
+        done = subprocess.run(['git', '-C', str(repo), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                              capture_output=True, text=True)
+    except OSError:
+        return repo
+    common = Path(done.stdout.strip())
+    return common.parent if done.returncode == 0 and common.name == '.git' else repo
+
+
 # The clone of jnterfaces: JNTERFACES, else jnterfaces in the folder of package clones SKILL_PACKAGES_DIR, as in CI,
-# else ../jnterfaces.
+# else jnterfaces next to the main clone of this repository, so a worktree finds the same clone.
 PACKAGES_DIR = os.environ.get('SKILL_PACKAGES_DIR')
 JNTERFACES = Path(os.environ.get('JNTERFACES')
-                  or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else REPO.parent / 'jnterfaces'))
+                  or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else main_clone(REPO).parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
 # The merge of jnterfaces#62. It installs the programs of a profile (#39), runs integration before coverage-check
@@ -174,6 +189,37 @@ def install(packages, target, *args):
     env = {k: v for k, v in os.environ.items() if k not in ('SKILL_PACKAGES_DIR', 'VIRTUAL_ENV')}
     return run([sys.executable, str(packages / 'jnterfaces/scripts/install_stack.py'), '--target', str(target),
                 *args], target, env=env)
+
+
+@unittest.skipUnless(shutil.which('git'), 'needs git')
+class MainClone(unittest.TestCase):
+    """The lab finds jnterfaces next to the main clone, so a worktree in another folder runs the lab and skips none."""
+
+    def test_each_class_keeps_its_own_skip(self):
+        """Guard needs rustup, and MainClone needs only git."""
+        source = Path(__file__).read_text()
+        self.assertIn("@unittest.skipUnless(shutil.which('rustup'), 'needs rustup')\nclass Guard(", source)
+        self.assertIn("@unittest.skipUnless(shutil.which('git'), 'needs git')\nclass MainClone(", source)
+
+    def test_no_git_gives_the_folder_itself(self):
+        with mock.patch.object(subprocess, 'run', side_effect=FileNotFoundError('git')):
+            self.assertEqual(main_clone(Path('/x')), Path('/x'))
+
+    def test_a_worktree_gives_the_folder_of_its_main_clone(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        clone, tree = root / 'projects/repo', root / 'trees/feature'
+        clone.mkdir(parents=True)
+        for args in (['init', '-q'], ['commit', '-q', '--allow-empty', '-m', 'one'],
+                     ['worktree', 'add', '-q', '-b', 'feature', str(tree)]):
+            subprocess.run(['git', *args], cwd=clone, env=env, check=True, capture_output=True)
+        self.assertEqual(main_clone(tree), clone)
+        self.assertEqual(main_clone(clone), clone)
+        (root / 'plain').mkdir()
+        self.assertEqual(main_clone(root / 'plain'), root / 'plain')
 
 
 @unittest.skipUnless(shutil.which('rustup'), 'needs rustup')
