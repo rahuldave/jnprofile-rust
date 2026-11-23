@@ -66,7 +66,8 @@ for the tool `toml`. For the tool `api`, it installs the nightly toolchain
 
 The lab is a test that installs the profile into a temporary Cargo project and
 runs each step. It needs a clone of jnterfaces with commit `99b12a5`, next to
-this repository or in the folder that the variable `JNTERFACES` names. The lab
+this repository or in the folder that the variable `JNTERFACES` names. A
+worktree finds the clone next to its main clone. The lab
 copies jnterfaces at that commit, and leaves the clone alone. Run the lab and
 the other tests with this command:
 
