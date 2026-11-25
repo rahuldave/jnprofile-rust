@@ -621,6 +621,148 @@ class LauncherCargo(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
 
 
+@unittest.skipUnless(shutil.which('cargo'), 'needs cargo')
+class InstallBinCargo(unittest.TestCase):
+    """The real install-bin: every binary of the package, one old copy kept, and the choice of binaries."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(os.path.realpath(temp.name))
+        self.project = self.root / 'p'
+        (self.project / 'src/bin').mkdir(parents=True)
+        self.env = {k: v for k, v in os.environ.items() if k not in ('RUSTC_WRAPPER', 'CARGO_TARGET_DIR', 'JLOG_RUN')}
+        self.env['CARGO_INSTALL_ROOT'] = str(self.root / 'install')
+        self.bin = self.root / 'install/bin'
+
+    def version(self, version, broken=False, feature=False):
+        (self.project / 'Cargo.toml').write_text(
+            f'[package]\nname = "tool-pkg"\nversion = "{version}"\nedition = "2021"\n\n[features]\nfast = []\n')
+        for name in ('gossil', 'gos'):
+            fast = 'if cfg!(feature = "fast") { " fast" } else { "" }'
+            body = 'nope' if broken else f'println!("{name} {version}{{}}", {fast});'
+            (self.project / f'src/bin/{name}.rs').write_text(f'fn main() {{ {body} }}\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=self.project, env=self.env, check=True,
+                       capture_output=True)
+
+    def install(self, *names):
+        return subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'install-bin', *names],
+                              cwd=self.project, env=self.env, capture_output=True, text=True)
+
+    def output(self, name):
+        return subprocess.run([str(self.bin / name)], capture_output=True, text=True).stdout.strip()
+
+    def files(self):
+        return sorted(p.name for p in self.bin.iterdir())
+
+    def test_each_install_keeps_only_the_last_old_binary(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gossil'])
+        self.version('0.2.0')
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('kept the old gossil as', done.stdout)
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertEqual((self.output('gossil'), self.output('gossil-0.1.0')), ('gossil 0.2.0', 'gossil 0.1.0'))
+        self.version('0.3.0')
+        self.assertEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gos-0.2.0', 'gossil', 'gossil-0.2.0'])
+        self.assertEqual(self.output('gossil-0.2.0'), 'gossil 0.2.0')
+
+    def test_a_file_that_install_bin_did_not_make_stays(self):
+        self.version('0.1.0')
+        self.install()
+        for name in ('gos-1.2.3-backup', 'gos-0.0.9', 'gos-tool'):
+            (self.bin / name).write_text(name)
+        self.version('0.2.0')
+        self.install()
+        self.version('0.3.0')
+        self.install()
+        self.assertEqual(self.files(), ['gos', 'gos-0.0.9', 'gos-0.2.0', 'gos-1.2.3-backup', 'gos-tool', 'gossil',
+                                        'gossil-0.2.0'])
+
+    def test_a_file_of_the_name_of_the_copy_that_it_did_not_make_stays(self):
+        self.version('0.1.0')
+        self.install()
+        (self.bin / 'gos-0.1.0').write_text('mine')
+        self.version('0.2.0')
+        done = self.install()
+        self.assertIn('is a file that it did not make', done.stdout)
+        self.assertEqual((self.bin / 'gos-0.1.0').read_text(), 'mine')
+        self.assertEqual(self.output('gossil-0.1.0'), 'gossil 0.1.0')
+
+    def test_an_unknown_old_version_keeps_no_copy(self):
+        self.version('0.1.0')
+        self.install()
+        (self.root / 'install/.crates2.json').unlink()
+        self.version('0.2.0')
+        done = self.install()
+        self.assertIn('recorded no version', done.stdout)
+        self.assertEqual(self.files(), ['gos', 'gossil'])
+
+    def test_the_same_version_again_keeps_the_old_copy(self):
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn('kept the old', done.stdout)
+        self.assertEqual(self.output('gossil-0.1.0'), 'gossil 0.1.0')
+
+    def test_a_failed_build_keeps_the_binary_and_the_older_copy(self):
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        self.version('0.3.0', broken=True)
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertEqual(self.output('gossil'), 'gossil 0.2.0')
+
+    def test_options_after_a_double_dash_go_to_cargo_install(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install('gos', '--', '--features', 'fast').returncode, 0)
+        self.assertEqual(self.output('gos'), 'gos 0.1.0 fast')
+
+    def test_an_install_root_of_the_cargo_config_does_not_split_the_folders(self):
+        """install-bin names its folder with --root, so cargo installs where the copies are kept."""
+        del self.env['CARGO_INSTALL_ROOT']
+        self.env['CARGO_HOME'] = str(self.root / 'install')
+        (self.project / '.cargo').mkdir()
+        (self.project / '.cargo/config.toml').write_text(f'[install]\nroot = "{self.root / "elsewhere"}"\n')
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_a_name_installs_only_that_binary_and_an_unknown_name_fails(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install('gos').returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ['gos'])
+        done = self.install('nope')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('no binary named nope', done.stderr)
+
+    def test_a_workspace_with_binaries_in_two_packages_needs_names(self):
+        (self.project / 'Cargo.toml').write_text('[workspace]\nmembers = ["a", "b"]\nresolver = "2"\n')
+        for name in ('a', 'b'):
+            (self.project / name / 'src').mkdir(parents=True)
+            (self.project / name / 'Cargo.toml').write_text(
+                f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2021"\n')
+            (self.project / name / 'src/main.rs').write_text('fn main() {}\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=self.project, env=self.env, check=True,
+                       capture_output=True)
+        done = self.install()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('name the binaries to install', done.stderr)
+        self.assertEqual(self.install('a', 'b').returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ['a', 'b'])
+
+
 class WarmCoverageSteps(unittest.TestCase):
     """run_tests with the real cargo llvm-cov and the real wrapper of the evidence, in a workspace of two packages.
 

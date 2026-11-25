@@ -26,3 +26,10 @@ quick *args:
     if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx lint; then {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} lint; fi
     if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx typecheck; then {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} typecheck; fi
     if {{ quote(just_executable()) }} --justfile {{ quote(module_file()) }} --summary | tr ' ' '\n' | grep -qx test; then {{rust_py}} {{rust_steps}} quick-test "$@"; fi
+
+# Build the release binaries with cargo install, into the folder bin of CARGO_INSTALL_ROOT, else of CARGO_HOME, else
+# of ~/.cargo. With no BIN, every binary of the package of the root Cargo.toml, else of the only package with
+# binaries. Options for cargo install go after --. Each binary of another version that it replaces stays as
+# NAME-VERSION, and only the last such copy stays: just install-bin gos -- --features fast
+install-bin *args:
+    {{rust_py}} {{rust_steps}} install-bin "$@"
