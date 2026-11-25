@@ -114,12 +114,24 @@ A full run of `just test`, with no arguments, takes the worktree tree before the
 | Recipe | What it does |
 |---|---|
 | `just integration` | Runs the integration tests with `cargo llvm-cov test`: each test target, and each example or bench that sets `test = true`. It writes the coverage to `target/llvm-cov/integration.lcov`. Extra arguments go to cargo llvm-cov test, as for `test` |
+| `just integration-changed` | Runs, with no coverage, the test targets that the change of the tree may break, for a fix round. Extra arguments go to each `cargo test`. It is not a step of `just check`, so run `just check` once on the final tree |
 
 An integration test is a test target, such as a file `tests/NAME.rs`, or a `[[test]]` of `Cargo.toml`. It uses the crate from outside, as a user does. A workspace with no test target runs no test, and its report is empty.
 
 Each step reads the targets from `cargo metadata`, and names each target whose key `test` is true, with `--bin`, `--test`, `--example` or `--bench`. So a `[[test]]` with `test = false`, such as a slow suite, does not run, as with a plain `cargo test`. A library has no such name, so `test` gives `--lib`. cargo looks for a name in each package. So when a library sets `test = false`, or two packages have a target of the same name and only one tests it, each package runs in a `cargo llvm-cov` of its own, and the step merges the reports.
 
 An extra argument that chooses targets or packages, such as `--test api` or `-p core`, takes the place of the choice of the step. The step adds `--workspace` only when the arguments choose no package. So `just integration --test slow` runs that suite, and `just test --test api` runs only `tests/api.rs`. An argument after `--` goes to the tests. The doctests, the tests in doc comments, run in neither step. `cargo llvm-cov test` leaves them out unless it gets `--doctests`, and that option needs nightly Rust.
+
+### integration-changed
+
+`integration-changed` builds the test targets with `cargo test --no-run`, with the examples and benches that set `test = true`. For each target it then reads the dep-info file that `rustc` writes. That file lists every file the target reads, by `mod`, `#[path]` or `include!`, and the files that `include_str!` reads. The changes are those against HEAD, staged, unstaged or untracked, of any file. A target runs in each of these cases:
+
+- **One of its files changed,** such as `tests/support/db.rs` or a fixture.
+- **It names a changed module of a library.** The match is by the first segment of the module path. So a change to `src/store.rs` or to its private submodule `src/store/disk.rs` runs each target that names `app::store`, in a path or in a `use` group. A change to `src/lib.rs` runs each target that names the crate. The name of the library is its crate name, an alias of `use app as a` or `extern crate app as a`, or the rename of a dependency in another package.
+- **It runs a binary of a changed package.** A target that reads `env!("CARGO_BIN_EXE_NAME")` runs when the library or a binary of the package of that binary changed.
+- **The `Cargo.toml` or `build.rs` of its package changed,** or `Cargo.lock`, or the `Cargo.toml` of a workspace that is no package.
+
+A target that reaches a module only through a re-export, such as `app::Thing`, is not chosen, and neither is one that reads a fixture at run time. The recipe prints each target that it runs, with the reason, and each target that it skips. With no target to run, it passes. A target that does not build fails the recipe, and a stale `Cargo.lock` exits with 2. It runs the targets by name, and exits with the codes of `test-paths`.
 
 ### integration with nextest
 

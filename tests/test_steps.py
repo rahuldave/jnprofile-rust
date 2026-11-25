@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -635,6 +636,186 @@ class LauncherCargo(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
 
 
+class IntegrationChangedRules(unittest.TestCase):
+    """The rules of integration-changed: the module of a file, the paths a test names, and the names of a library."""
+
+    def test_the_module_path_of_a_source_file(self):
+        root = Path(os.path.realpath(tempfile.gettempdir())) / 'p/src'
+        for path, want in (('lib.rs', []), ('main.rs', []), ('store.rs', ['store']), ('store/mod.rs', ['store']),
+                           ('store/disk.rs', ['store', 'disk'])):
+            self.assertEqual(steps.module_path(root / path, root), want, path)
+        self.assertIsNone(steps.module_path(root.parent / 'tests/api.rs', root))
+
+    def test_the_first_segments_that_a_test_names(self):
+        for text, want in (('use app::store::get;', {'store'}),
+                           ('use app::{other::two, store::{get}};', {'other', 'store'}),
+                           ('let x = app :: store :: get();', {'store'}),
+                           ('use app::r#type::x;', {'type'}),
+                           ('use myapp::store::get; use x::app::y;', set()),
+                           ('use app;', None),
+                           ('use app::{self, store};', None),
+                           ('fn f() {}', set())):
+            self.assertEqual(steps.first_segments(text, 'app'), want, text)
+
+    def test_a_library_is_named_by_its_crate_or_by_the_rename_of_a_dependency(self):
+        packages = [{'id': 'a', 'name': 'my-app', 'dependencies': []},
+                    {'id': 'u', 'name': 'user', 'dependencies': [{'name': 'my-app', 'rename': 'a', 'path': '/x'}]},
+                    {'id': 'v', 'name': 'plain', 'dependencies': [{'name': 'my-app', 'rename': None, 'path': '/x'}]},
+                    {'id': 'w', 'name': 'other', 'dependencies': [{'name': 'serde', 'rename': None}]}]
+        self.assertEqual(steps.library_names(packages, ('my-app', 'my_app')),
+                         {'a': {'my_app'}, 'u': {'a'}, 'v': {'my_app'}, 'w': set()})
+
+
+@unittest.skipUnless(shutil.which('cargo'), 'needs cargo')
+class IntegrationChangedCargo(unittest.TestCase):
+    """The real integration-changed: which test targets run for a change, and that it prints them."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = root = Path(os.path.realpath(temp.name))
+        for folder in ('src/store', 'src/bin', 'tests/support', 'tests/multi', 'itest', 'examples'):
+            (root / folder).mkdir(parents=True)
+        files = {
+            'Cargo.toml': ('[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                           '[[test]]\nname = "custom"\npath = "itest/main.rs"\n\n'
+                           '[[example]]\nname = "ex"\ntest = true\n'),
+            'src/lib.rs': 'pub mod other;\npub mod store;\npub mod data;\n',
+            'src/store.rs': 'mod disk;\npub fn get() -> u32 { disk::one() }\n',
+            'src/store/disk.rs': 'pub fn one() -> u32 { 1 }\n',
+            'src/other.rs': 'pub fn two() -> u32 { 2 }\n',
+            'src/data.rs': 'pub const TEXT: &str = include_str!("data.txt");\n',
+            'src/data.txt': 'one\n',
+            'src/main.rs': 'fn main() { println!("{}", app::store::get()); }\n',
+            'tests/api.rs': '#[test]\nfn api() { assert_eq!(app::store::get(), 1); }\n',
+            'tests/group.rs': ('use app::{other::two, store::{get}};\n#[test]\n'
+                               'fn g() { assert_eq!(get() + two(), 3); }\n'),
+            'tests/alias.rs': 'use app as a;\n#[test]\nfn al() { assert_eq!(a::store::get(), 1); }\n',
+            'tests/db.rs': ('#[path = "support/mod.rs"]\n#[allow(\n    dead_code,\n)]\nmod helpers;\n'
+                            '#[test]\nfn db() { assert!(helpers::ok()); }\n'),
+            'tests/fixture.rs': ('const F: &str = include_str!("support/fixture.txt");\n'
+                                 '#[test]\nfn f() { assert_eq!(F, "x\\n"); }\n'),
+            'tests/cli.rs': ('#[test]\nfn cli() {\n    let out = std::process::Command::new(env!("CARGO_BIN_EXE_app"))'
+                             '.output().unwrap();\n    assert_eq!(out.stdout, b"1\\n");\n}\n'),
+            'tests/unrelated.rs': '#[test]\nfn u() { assert_eq!(app::other::two(), 2); }\n',
+            'tests/multi/main.rs': 'mod part;\n#[test]\nfn m() { part::p(); }\n',
+            'tests/multi/part.rs': 'pub fn p() {}\n',
+            'tests/support/mod.rs': 'pub fn ok() -> bool { true }\n',
+            'tests/support/fixture.txt': 'x\n',
+            'examples/ex.rs': ('fn main() {}\n#[test]\nfn ex() { assert_eq!(app::store::get(), 1); }\n'),
+            'tests/cli_extra.rs': ('#[test]\nfn e() {\n    let _ = env!("CARGO_BIN_EXE_app-extra");\n}\n'),
+            'src/bin/app-extra.rs': 'fn main() {}\n',
+            'itest/main.rs': '#[test]\nfn custom() { assert_eq!(app::other::two(), 2); }\n',
+            '.gitignore': '/target/\n'}
+        for name, text in files.items():
+            (root / name).write_text(text)
+        self.env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                        GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=self.env, check=True,
+                       capture_output=True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=self.env, check=True, capture_output=True)
+
+    def changed(self, cwd=None):
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'integration-changed'],
+                              cwd=cwd or self.root, env=self.env, capture_output=True, text=True)
+        runs = sorted(re.findall(r'^integration-changed: runs app --(?:test|example) ([\w-]+)', done.stdout, re.M))
+        skips = sorted(re.findall(r'^integration-changed: skips app --(?:test|example) ([\w-]+)', done.stdout, re.M))
+        return done.returncode, runs, skips, done.stdout + done.stderr
+
+    def test_a_changed_private_submodule_runs_the_tests_that_name_its_module_and_the_binary(self):
+        (self.root / 'src/store/disk.rs').write_text('pub fn one() -> u32 { 2 - 1 }\n')
+        code, runs, _, out = self.changed()
+        self.assertEqual((code, runs), (0, ['alias', 'api', 'cli', 'cli_extra', 'ex', 'group']), out)
+        self.assertIn('test api ... ok', out)
+        self.assertIn('test ex ... ok', out)
+
+    def test_a_changed_helper_runs_each_test_that_reads_it_by_path_or_mod(self):
+        (self.root / 'tests/support/mod.rs').write_text('pub fn ok() -> bool { 1 == 1 }\n')
+        code, runs, _, out = self.changed()
+        self.assertEqual((code, runs), (0, ['db']), out)
+
+    def test_a_file_that_include_str_reads_counts(self):
+        (self.root / 'tests/support/fixture.txt').write_text('x\n\n')
+        code, runs, _, out = self.changed()
+        self.assertEqual(runs, ['fixture'], out)
+        self.assertEqual(code, 1, out)
+
+    def test_a_changed_binary_runs_the_tests_that_run_it(self):
+        (self.root / 'src/main.rs').write_text('fn main() { println!("{}", app::store::get() + 0); }\n')
+        code, runs, _, out = self.changed()
+        self.assertEqual((code, runs), (0, ['cli', 'cli_extra']), out)
+        self.assertRegex(out, r'runs app --test cli_extra, for the binary app-extra\n')
+
+    def test_a_test_with_a_path_of_its_own_and_a_folder_test_run_by_name(self):
+        (self.root / 'itest/main.rs').write_text('#[test]\nfn custom() { assert_eq!(app::other::two(), 2 + 0); }\n')
+        (self.root / 'tests/multi/part.rs').write_text('pub fn p() { let _ = 1; }\n')
+        code, runs, _, out = self.changed()
+        self.assertEqual((code, runs), (0, ['custom', 'multi']), out)
+        self.assertIn('test custom ... ok', out)
+        self.assertNotIn('test api ... ok', out)
+
+    def test_a_changed_manifest_runs_every_target(self):
+        with (self.root / 'Cargo.toml').open('a') as manifest:
+            manifest.write('\n# a comment\n')
+        code, runs, skips, out = self.changed()
+        self.assertEqual((code, skips), (0, []), out)
+        self.assertEqual(len(runs), 11, out)
+
+    def test_no_change_runs_nothing_and_passes(self):
+        code, runs, skips, out = self.changed()
+        self.assertEqual((code, runs, len(skips)), (0, [], 11), out)
+        self.assertIn('so no test ran', out)
+
+    def test_a_project_in_a_folder_of_its_repo_sees_the_committed_changes(self):
+        outer = self.root.parent / (self.root.name + '-outer')
+        shutil.copytree(self.root, outer / 'rust', ignore=shutil.ignore_patterns('.git', 'target'))
+        self.addCleanup(shutil.rmtree, outer, True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=outer, env=self.env, check=True, capture_output=True)
+        (outer / 'rust/tests/support/mod.rs').write_text('pub fn ok() -> bool { 1 == 1 }\n')
+        code, runs, _, out = self.changed(outer / 'rust')
+        self.assertEqual((code, runs), (0, ['db']), out)
+
+    def test_a_stale_lock_file_exits_with_the_runner_code(self):
+        manifest = self.root / 'Cargo.toml'
+        manifest.write_text(manifest.read_text().replace('version = "0.1.0"', 'version = "0.2.0"'))
+        code, _, _, out = self.changed()
+        self.assertEqual(code, 2, out)
+
+    def test_a_build_that_fails_fails(self):
+        (self.root / 'src/store.rs').write_text('mod disk;\npub fn get() -> u32 { nope }\n')
+        self.assertEqual(self.changed()[0], 1)
+
+
+@unittest.skipUnless(shutil.which('cargo'), 'needs cargo')
+class IntegrationChangedWorkspace(unittest.TestCase):
+    """integration-changed in a workspace with a virtual manifest."""
+
+    def test_a_change_to_the_manifest_of_the_workspace_runs_every_target(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'a/src').mkdir(parents=True)
+        (root / 'a/tests').mkdir()
+        (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["a"]\nresolver = "2"\n')
+        (root / 'a/Cargo.toml').write_text('[package]\nname = "a"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'a/src/lib.rs').write_text('pub fn one() -> u32 { 1 }\n')
+        (root / 'a/tests/t.rs').write_text('#[test]\nfn t() { assert_eq!(a::one(), 1); }\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        with (root / 'Cargo.toml').open('a') as manifest:
+            manifest.write('\n[profile.dev]\nopt-level = 0\n')
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'integration-changed'],
+                              cwd=root, env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn('runs a --test t, for Cargo.toml of the workspace', done.stdout)
 @unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo-nextest'),
                      'needs cargo llvm-cov and nextest')
 class NextestCargo(unittest.TestCase):

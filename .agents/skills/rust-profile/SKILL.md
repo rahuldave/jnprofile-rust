@@ -25,7 +25,7 @@ first.
 | `lint` | `fmt`, `fmt-check`, `lint` | the format with rustfmt, and each clippy warning as an error |
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
 | `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
-| `integration` | `integration` | the tests of the test targets, such as the files in `tests/` |
+| `integration` | `integration`, `integration-changed` | the tests of the test targets, such as the files in `tests/`; `integration-changed` runs those that the change may break, in a fix round |
 | `docstring` | `docstring-check` | a doc comment on each item, public or private |
 | `api` | `api-check`, `api-prose-check` | a comment on each public item, parameter and return, for the API pages, and the prose of the changed pages |
 | `toml`, not a default tool | `toml-fmt`, `toml-check` | the format of the TOML files with taplo, and the order of the tables of `Cargo.toml` with cargo-sort |
