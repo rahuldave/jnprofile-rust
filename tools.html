@@ -26,6 +26,10 @@
 <td>Runs the quick checks of a fix round, with no coverage: <code>fmt-check</code>, <code>lint</code>, <code>typecheck</code>, and the unit tests with a plain <code>cargo test</code>. The tests take the same targets as <code>just test</code>, so a project with only a binary works. Each check runs only when its tool is installed, which means the module of the profile has its recipe. The installer copies every recipe file, so a file alone does not show a tool. The first check that fails stops the rest. Extra arguments go to <code>cargo test</code>. Arguments that choose packages or targets, such as <code>-p core</code> or <code>--test api</code>, take the place of the targets: <code>just rust::quick -p core</code>. The installer also gives the project <code>just quick</code>, which runs it in each profile that has it. It is not a step of <code>just check</code>, so run <code>just check</code> once on the final tree</td>
 </tr>
 <tr>
+<td><code>just install-bin [BIN...]</code></td>
+<td>Builds the release binaries with <code>cargo install --locked --force --path</code>, and puts them in the folder <code>bin</code> of <code>CARGO_INSTALL_ROOT</code>, else of <code>CARGO_HOME</code>, else of <code>~/.cargo</code>. With no <code>BIN</code>, it takes every binary of the package of the root <code>Cargo.toml</code>, else of the only package with binaries. Before it replaces a binary, it keeps the old one as <code>NAME-VERSION</code>, with the version that <code>cargo install</code> recorded, and removes the older such copy, so one old binary stays. It builds the working tree, with the default features, and uses the release build in <code>target/</code> again. It is not a step of <code>just check</code></td>
+</tr>
+<tr>
 <td><code>just version</code></td>
 <td>Prints the version of the project, <code>X.Y.Z</code>, from <code>[package]</code> or <code>[workspace.package]</code> of the root <code>Cargo.toml</code>, for the release tag. It prints nothing when there is none. It exits with 2 when the file cannot be read, or when the version is not semver. It is not a step of <code>just check</code></td>
 </tr>
