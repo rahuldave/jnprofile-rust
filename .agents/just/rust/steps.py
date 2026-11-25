@@ -474,6 +474,21 @@ def write_launcher(launcher, helper):
     return launcher
 
 
+# With this variable set to 1, the step integration runs its tests with cargo nextest, a test runner that runs the
+# tests of every test binary at the same time, each in a process of its own.
+NEXTEST = 'JNPROFILE_RUST_NEXTEST'
+
+
+def coverage_command(step):
+    """The cargo llvm-cov command of STEP: COVERAGE, or for integration with NEXTEST set to 1, cargo llvm-cov nextest.
+
+    nextest fails a run with no test by default, and the step passes it, as cargo test does.
+    """
+    if step == 'integration' and os.environ.get(NEXTEST, '').strip() == '1':
+        return [*COVERAGE[:2], 'nextest', *COVERAGE[3:], '--no-tests=pass']
+    return COVERAGE
+
+
 def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
@@ -513,7 +528,7 @@ def run_tests(step, args):
                JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
-        command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
+        command = [*coverage_command(step), *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
         code = subprocess.run(command, env=env).returncode
         if code:

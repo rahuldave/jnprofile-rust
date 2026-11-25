@@ -222,6 +222,20 @@ class Targets(StandInCargo):
         code, log = self.quick()
         self.assertEqual((code, len(log)), (101, 1))
 
+    def test_integration_runs_with_nextest_only_when_the_project_sets_it(self):
+        self.packages(['lib', ('test', 'api', True)])
+        for value, runner in (('1', 'nextest'), ('', 'test'), ('0', 'test'), ('yes', 'test')):
+            self.log.unlink(missing_ok=True)
+            with mock.patch.dict(os.environ, {steps.NEXTEST: value}), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.run_tests('integration', []), 0)
+            line = self.log.read_text().splitlines()[0]
+            self.assertTrue(line.startswith(f'llvm-cov {runner} --all-features'), (value, line))
+            self.assertEqual('--no-tests=pass' in line, runner == 'nextest', value)
+        self.log.unlink()
+        with mock.patch.dict(os.environ, {steps.NEXTEST: '1'}), contextlib.redirect_stdout(io.StringIO()):
+            steps.run_tests('test', [])
+        self.assertTrue(self.log.read_text().startswith('llvm-cov test '))
+
     def test_run_gives_cargo_the_targets_the_report_and_the_arguments_last(self):
         self.packages(['lib', ('test', 'api', True)])
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -618,6 +632,80 @@ class LauncherCargo(unittest.TestCase):
         subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
         done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration'],
                               cwd=root, env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo-nextest'),
+                     'needs cargo llvm-cov and nextest')
+class NextestCargo(unittest.TestCase):
+    """The real integration step with nextest: it writes the coverage, and leaves out the ignored tests."""
+
+    def test_integration_with_nextest_writes_the_report(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'tests').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn one() -> u32 {\n    1\n}\n')
+        (root / 'tests/api.rs').write_text('#[test]\nfn a() { assert_eq!(w::one(), 1); }\n'
+                                           '#[test]\n#[ignore]\nfn slow() { panic!("ran"); }\n')
+        (root / 'tests/empty.rs').write_text('\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid', JNPROFILE_RUST_NEXTEST='1')
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration'],
+                              cwd=root, env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        self.assertIn('llvm-cov nextest', done.stdout)
+        self.assertIn('DA:2,1', (root / 'target/llvm-cov/integration.lcov').read_text())
+
+    def project(self, tests):
+        """A committed scratch project with a library and the test files TESTS, and its environment."""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'tests').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn one() -> u32 {\n    1\n}\n')
+        for name, text in tests.items():
+            (root / 'tests' / name).write_text(text)
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid', JNPROFILE_RUST_NEXTEST='1')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        return root, env
+
+    def integration(self, root, env, *args):
+        return subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration', *args],
+                              cwd=root, env=env, capture_output=True, text=True)
+
+    def test_a_failed_test_fails_the_step(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() { assert_eq!(w::one(), 2); }\n'})
+        self.assertNotEqual(self.integration(root, env).returncode, 0)
+
+    def test_the_test_group_example_of_the_docs_runs(self):
+        """docs/tools.md names a test and a test binary; in a project that has both, its nextest.toml works."""
+        text = (REPO / 'docs/tools.md').read_text()
+        example = text.split('### integration with nextest', 1)[1].split('```toml\n', 1)[1].split('```', 1)[0]
+        root, env = self.project({'conformance.rs': '#[test]\nfn c() { assert_eq!(w::one(), 1); }\n',
+                                  'plan.rs': '#[test]\nfn plan_cli_and_evidence() { assert_eq!(w::one(), 1); }\n'})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text(example)
+        done = self.integration(root, env)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+    def test_a_filter_expression_goes_before_the_double_dash(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() {}\n#[test]\nfn b() { panic!("b ran"); }\n'})
+        done = self.integration(root, env, '-E', 'test(a)')
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
 
 
