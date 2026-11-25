@@ -132,6 +132,7 @@ An extra argument that chooses targets or packages, such as `--test api` or `-p 
 - **The `Cargo.toml` or `build.rs` of its package changed,** or `Cargo.lock`, or the `Cargo.toml` of a workspace that is no package.
 
 A target that reaches a module only through a re-export, such as `app::Thing`, is not chosen, and neither is one that reads a fixture at run time. The recipe prints each target that it runs, with the reason, and each target that it skips. With no target to run, it passes. A target that does not build fails the recipe, and a stale `Cargo.lock` exits with 2. It runs the targets by name, and exits with the codes of `test-paths`.
+
 ### integration with nextest
 
 `cargo test` runs the test binaries one after another. A project can run the `integration` step through cargo nextest instead. nextest runs the tests of every test binary at the same time, each test in a process of its own. Set `JNPROFILE_RUST_NEXTEST=1` in the shell, or in the `env` of the CI job, and install the runner with `cargo install cargo-nextest --locked`.
