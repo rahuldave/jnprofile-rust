@@ -121,6 +121,30 @@ Each step reads the targets from `cargo metadata`, and names each target whose k
 
 An extra argument that chooses targets or packages, such as `--test api` or `-p core`, takes the place of the choice of the step. The step adds `--workspace` only when the arguments choose no package. So `just integration --test slow` runs that suite, and `just test --test api` runs only `tests/api.rs`. An argument after `--` goes to the tests. The doctests, the tests in doc comments, run in neither step. `cargo llvm-cov test` leaves them out unless it gets `--doctests`, and that option needs nightly Rust.
 
+### integration with nextest
+
+`cargo test` runs the test binaries one after another. A project can run the `integration` step through cargo nextest instead. nextest runs the tests of every test binary at the same time, each test in a process of its own. Set `JNPROFILE_RUST_NEXTEST=1` in the shell, or in the `env` of the CI job, and install the runner with `cargo install cargo-nextest --locked`.
+
+The step then runs `cargo llvm-cov nextest` with the same targets and the same report. A run with no test passes, as with `cargo test`. The `test` step keeps `cargo test`.
+
+Three things change with nextest:
+
+- **A test runs in its own process.** Tests of one file that share a `static`, or a `OnceLock` set by the first test, each see a fresh one. A test that passes with `cargo test` and fails with nextest may depend on such state.
+- **Filters are those of nextest.** A filter expression goes before `--`, as in `just integration -E 'test(api)'`. After `--`, a plain test name still filters.
+- **A test target with `harness = false` must answer `--list`,** as one built on libtest-mimic does. nextest first asks each test binary for its tests, and a plain `main` that does not answer stops the step.
+- **Tests that cannot share the machine need a name in `.config/nextest.toml`.** A test with a short timeout, or one that starts a program, may fail under the load of the others. nextest runs the tests of a test group one at a time. Each name in the filter must be one of the project, since nextest fails on a `binary(...)` that matches no binary:
+
+```toml
+[test-groups]
+serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(plan_cli_and_evidence) | binary(conformance)'
+test-group = 'serial'
+```
+
+An ignored test stays out of the run, as with `cargo test`.
+
 ## test-paths
 
 `test-paths` takes the files that the `test-parent` recipe of the tasker role gives it. `test-parent` gives it only the changed files that match the key `tests` of `profile.json`, `tests/**`. When no file matches, as in a change with unit tests only, `test-parent` does not call `test-paths`. A unit test lives in the file of its code, such as `src/lib.rs`, and a copy of that file in the parent commit would bring the new code too.
