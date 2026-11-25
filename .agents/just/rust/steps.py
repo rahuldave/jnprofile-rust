@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -474,6 +475,21 @@ def write_launcher(launcher, helper):
     return launcher
 
 
+# With this variable set to 1, the step integration runs its tests with cargo nextest, a test runner that runs the
+# tests of every test binary at the same time, each in a process of its own.
+NEXTEST = 'JNPROFILE_RUST_NEXTEST'
+
+
+def coverage_command(step):
+    """The cargo llvm-cov command of STEP: COVERAGE, or for integration with NEXTEST set to 1, cargo llvm-cov nextest.
+
+    nextest fails a run with no test by default, and the step passes it, as cargo test does.
+    """
+    if step == 'integration' and os.environ.get(NEXTEST, '').strip() == '1':
+        return [*COVERAGE[:2], 'nextest', *COVERAGE[3:], '--no-tests=pass']
+    return COVERAGE
+
+
 def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
@@ -513,7 +529,7 @@ def run_tests(step, args):
                JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
-        command = [*COVERAGE, *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
+        command = [*coverage_command(step), *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
         code = subprocess.run(command, env=env).returncode
         if code:
@@ -1271,6 +1287,128 @@ def integration_changed(args):
         commands.setdefault(package_id, []).extend([option, name])
     return run_test_commands([['cargo', 'test', '--locked', '--all-features', '--package', package_id, *targets, *args]
                               for package_id, targets in commands.items()])
+def install_root():
+    """The folder that cargo install writes to: CARGO_INSTALL_ROOT, else CARGO_HOME, else ~/.cargo."""
+    root = os.environ.get('CARGO_INSTALL_ROOT') or os.environ.get('CARGO_HOME')
+    return Path(root) if root else Path.home() / '.cargo'
+
+
+def installed_versions(root, package):
+    """Map each binary that cargo install put in ROOT to the version it recorded, from ROOT/.crates2.json.
+
+    A binary of the package named PACKAGE wins over one of the same name from another package.
+    """
+    try:
+        installs = json.loads((root / '.crates2.json').read_text()).get('installs', {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    versions = {}
+    for key, entry in installs.items():
+        parts = key.split(' ')
+        if len(parts) >= 2 and isinstance(entry, dict):
+            for name in entry.get('bins', []):
+                if parts[0] == package or name not in versions:
+                    versions[name] = parts[1]
+    return versions
+
+
+# The copies that install-bin saved, by binary, in the install root, so it removes only a copy it made itself.
+SAVED = '.jnprofile-rust-install-bin.json'
+
+
+def saved_copies(root):
+    """The record SAVED in ROOT: the name of the file of each binary, mapped to the name of its saved copy."""
+    try:
+        record = json.loads((root / SAVED).read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(record, dict):
+        return {}
+    return {k: v for k, v in record.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def install_bin(argv):
+    """Build the release binaries of the project with cargo install, and keep one old copy of each binary it replaces.
+
+    ARGV is the names of binaries, then, after --, options for cargo install, such as --features x. With no name,
+    it installs every binary of the package of the root Cargo.toml, else of the only package that has binaries.
+    cargo installs into install_root, which the command names with --root, and builds in the target folder of the
+    workspace, so the release build is used again. Before cargo replaces a binary of another version, the step
+    copies it to NAME-VERSION, its version from .crates2.json. After cargo succeeds, it removes the copy that it
+    saved the time before, which its record SAVED names, so it never removes a file that it did not make. The same
+    version again saves no copy and removes none. Returns the exit code of the first cargo that fails.
+    """
+    names, extra = (argv[:argv.index('--')], argv[argv.index('--') + 1:]) if '--' in argv else (argv, [])
+    done = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], capture_output=True, text=True)
+    if done.returncode:
+        sys.stderr.write(done.stderr)
+        print('install-bin: cargo metadata failed', file=sys.stderr, flush=True)
+        return 1
+    meta = json.loads(done.stdout)
+    packages = [(package, [target['name'] for target in package['targets'] if 'bin' in target['kind']])
+                for package in meta['packages']]
+    if names:
+        chosen = [(package, [n for n in bins if n in names]) for package, bins in packages]
+        chosen = [(package, bins) for package, bins in chosen if bins]
+        missing = set(names) - {n for _, bins in chosen for n in bins}
+        if missing:
+            print(f'install-bin: no binary named {", ".join(sorted(missing))} in the workspace', file=sys.stderr)
+            return 1
+    else:
+        top_manifest = os.path.realpath(Path(meta['workspace_root']) / 'Cargo.toml')
+        own = [(package, bins) for package, bins in packages
+               if bins and os.path.realpath(package['manifest_path']) == top_manifest]
+        having = [(package, bins) for package, bins in packages if bins]
+        chosen = own or (having if len(having) == 1 else [])
+        if not chosen:
+            listed = ', '.join(n for _, bins in having for n in bins) or 'none'
+            print(f'install-bin: name the binaries to install, since no single package holds them: {listed}',
+                  file=sys.stderr)
+            return 1
+    if git('status', '--porcelain').stdout.strip():
+        print('install-bin: the working tree has changes that no commit holds, and cargo builds them too', flush=True)
+    root = install_root()
+    folder = root / 'bin'
+    for package, bins in chosen:
+        versions, made, record = installed_versions(root, package['name']), {}, saved_copies(root)
+        for name in bins:
+            for file in (name, f'{name}.exe'):
+                old = versions.get(name)
+                if not (folder / file).is_file() or old == package['version']:
+                    continue
+                if old is None:
+                    print(f'install-bin: keeps no copy of {file}, since cargo install recorded no version of it',
+                          flush=True)
+                    continue
+                stem, suffix = (file[:-4], '.exe') if file.endswith('.exe') else (file, '')
+                copy = folder / f'{stem}-{old}{suffix}'
+                existed = copy.exists()
+                if existed and record.get(file) != copy.name:
+                    print(f'install-bin: keeps no copy of {file}, since {copy} is a file that it did not make',
+                          flush=True)
+                    continue
+                shutil.copy2(folder / file, copy)
+                made[file] = (copy, existed)
+                print(f'install-bin: kept the old {file} as {copy}', flush=True)
+        command = ['cargo', 'install', '--locked', '--force', '--root', str(root), '--path',
+                   str(Path(package['manifest_path']).parent), *[arg for name in bins for arg in ('--bin', name)],
+                   *extra]
+        print(shlex.join(command), flush=True)
+        code = subprocess.run(command).returncode
+        if code:
+            for copy, existed in made.values():
+                if not existed:
+                    copy.unlink(missing_ok=True)
+            return code
+        record = saved_copies(root)
+        for file, (copy, _) in made.items():
+            before = record.get(file)
+            if before and before != copy.name and (folder / before).is_file():
+                (folder / before).unlink()
+            record[file] = copy.name
+        if made:
+            (root / SAVED).write_text(json.dumps(record, indent=1, sort_keys=True) + '\n')
+    return 0
 
 
 def outcome(code, out):
@@ -1822,6 +1960,8 @@ def main(argv):
         return docs()
     if argv[:1] == ['integration-changed']:
         return integration_changed(argv[1:])
+    if argv[:1] == ['install-bin']:
+        return install_bin(argv[1:])
     if argv[:1] == ['test-paths']:
         return test_paths(argv[1:])
     if argv in (['toml'], ['toml', '--check']):
@@ -1846,6 +1986,7 @@ def main(argv):
         return own if isinstance(own, int) else 0
     print('usage: steps.py run STEP [ARG...] | fresh STEP | quick-test [ARG...] | coverage | docs | '
           'integration-changed [ARG...] | '
+          'install-bin [BIN...] [-- ARG...] | '
           'test-paths [PATH...] | toml [--check] | '
           'ran prose [ARG...] | begin prose [ARG...] | stamp prose | api check | api prose [--base REF] | '
           'version | pages DOCS OUT [FILE...] | config DOCS OUT, where STEP is test or integration', file=sys.stderr)

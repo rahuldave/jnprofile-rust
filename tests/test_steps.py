@@ -223,6 +223,20 @@ class Targets(StandInCargo):
         code, log = self.quick()
         self.assertEqual((code, len(log)), (101, 1))
 
+    def test_integration_runs_with_nextest_only_when_the_project_sets_it(self):
+        self.packages(['lib', ('test', 'api', True)])
+        for value, runner in (('1', 'nextest'), ('', 'test'), ('0', 'test'), ('yes', 'test')):
+            self.log.unlink(missing_ok=True)
+            with mock.patch.dict(os.environ, {steps.NEXTEST: value}), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(steps.run_tests('integration', []), 0)
+            line = self.log.read_text().splitlines()[0]
+            self.assertTrue(line.startswith(f'llvm-cov {runner} --all-features'), (value, line))
+            self.assertEqual('--no-tests=pass' in line, runner == 'nextest', value)
+        self.log.unlink()
+        with mock.patch.dict(os.environ, {steps.NEXTEST: '1'}), contextlib.redirect_stdout(io.StringIO()):
+            steps.run_tests('test', [])
+        self.assertTrue(self.log.read_text().startswith('llvm-cov test '))
+
     def test_run_gives_cargo_the_targets_the_report_and_the_arguments_last(self):
         self.packages(['lib', ('test', 'api', True)])
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -802,6 +816,220 @@ class IntegrationChangedWorkspace(unittest.TestCase):
                               cwd=root, env=env, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn('runs a --test t, for Cargo.toml of the workspace', done.stdout)
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo-nextest'),
+                     'needs cargo llvm-cov and nextest')
+class NextestCargo(unittest.TestCase):
+    """The real integration step with nextest: it writes the coverage, and leaves out the ignored tests."""
+
+    def test_integration_with_nextest_writes_the_report(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'tests').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn one() -> u32 {\n    1\n}\n')
+        (root / 'tests/api.rs').write_text('#[test]\nfn a() { assert_eq!(w::one(), 1); }\n'
+                                           '#[test]\n#[ignore]\nfn slow() { panic!("ran"); }\n')
+        (root / 'tests/empty.rs').write_text('\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid', JNPROFILE_RUST_NEXTEST='1')
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration'],
+                              cwd=root, env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        self.assertIn('llvm-cov nextest', done.stdout)
+        self.assertIn('DA:2,1', (root / 'target/llvm-cov/integration.lcov').read_text())
+
+    def project(self, tests):
+        """A committed scratch project with a library and the test files TESTS, and its environment."""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'tests').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'src/lib.rs').write_text('pub fn one() -> u32 {\n    1\n}\n')
+        for name, text in tests.items():
+            (root / 'tests' / name).write_text(text)
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid', JNPROFILE_RUST_NEXTEST='1')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        return root, env
+
+    def integration(self, root, env, *args):
+        return subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'run', 'integration', *args],
+                              cwd=root, env=env, capture_output=True, text=True)
+
+    def test_a_failed_test_fails_the_step(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() { assert_eq!(w::one(), 2); }\n'})
+        self.assertNotEqual(self.integration(root, env).returncode, 0)
+
+    def test_the_test_group_example_of_the_docs_runs(self):
+        """docs/tools.md names a test and a test binary; in a project that has both, its nextest.toml works."""
+        text = (REPO / 'docs/tools.md').read_text()
+        example = text.split('### integration with nextest', 1)[1].split('```toml\n', 1)[1].split('```', 1)[0]
+        root, env = self.project({'conformance.rs': '#[test]\nfn c() { assert_eq!(w::one(), 1); }\n',
+                                  'plan.rs': '#[test]\nfn plan_cli_and_evidence() { assert_eq!(w::one(), 1); }\n'})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text(example)
+        done = self.integration(root, env)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+    def test_a_filter_expression_goes_before_the_double_dash(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() {}\n#[test]\nfn b() { panic!("b ran"); }\n'})
+        done = self.integration(root, env, '-E', 'test(a)')
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+
+@unittest.skipUnless(shutil.which('cargo'), 'needs cargo')
+class InstallBinCargo(unittest.TestCase):
+    """The real install-bin: every binary of the package, one old copy kept, and the choice of binaries."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(os.path.realpath(temp.name))
+        self.project = self.root / 'p'
+        (self.project / 'src/bin').mkdir(parents=True)
+        self.env = {k: v for k, v in os.environ.items() if k not in ('RUSTC_WRAPPER', 'CARGO_TARGET_DIR', 'JLOG_RUN')}
+        self.env['CARGO_INSTALL_ROOT'] = str(self.root / 'install')
+        self.bin = self.root / 'install/bin'
+
+    def version(self, version, broken=False, feature=False):
+        (self.project / 'Cargo.toml').write_text(
+            f'[package]\nname = "tool-pkg"\nversion = "{version}"\nedition = "2021"\n\n[features]\nfast = []\n')
+        for name in ('gossil', 'gos'):
+            fast = 'if cfg!(feature = "fast") { " fast" } else { "" }'
+            body = 'nope' if broken else f'println!("{name} {version}{{}}", {fast});'
+            (self.project / f'src/bin/{name}.rs').write_text(f'fn main() {{ {body} }}\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=self.project, env=self.env, check=True,
+                       capture_output=True)
+
+    def install(self, *names):
+        return subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'install-bin', *names],
+                              cwd=self.project, env=self.env, capture_output=True, text=True)
+
+    def output(self, name):
+        return subprocess.run([str(self.bin / name)], capture_output=True, text=True).stdout.strip()
+
+    def files(self):
+        return sorted(p.name for p in self.bin.iterdir())
+
+    def test_each_install_keeps_only_the_last_old_binary(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gossil'])
+        self.version('0.2.0')
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('kept the old gossil as', done.stdout)
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertEqual((self.output('gossil'), self.output('gossil-0.1.0')), ('gossil 0.2.0', 'gossil 0.1.0'))
+        self.version('0.3.0')
+        self.assertEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gos-0.2.0', 'gossil', 'gossil-0.2.0'])
+        self.assertEqual(self.output('gossil-0.2.0'), 'gossil 0.2.0')
+
+    def test_a_file_that_install_bin_did_not_make_stays(self):
+        self.version('0.1.0')
+        self.install()
+        for name in ('gos-1.2.3-backup', 'gos-0.0.9', 'gos-tool'):
+            (self.bin / name).write_text(name)
+        self.version('0.2.0')
+        self.install()
+        self.version('0.3.0')
+        self.install()
+        self.assertEqual(self.files(), ['gos', 'gos-0.0.9', 'gos-0.2.0', 'gos-1.2.3-backup', 'gos-tool', 'gossil',
+                                        'gossil-0.2.0'])
+
+    def test_a_file_of_the_name_of_the_copy_that_it_did_not_make_stays(self):
+        self.version('0.1.0')
+        self.install()
+        (self.bin / 'gos-0.1.0').write_text('mine')
+        self.version('0.2.0')
+        done = self.install()
+        self.assertIn('is a file that it did not make', done.stdout)
+        self.assertEqual((self.bin / 'gos-0.1.0').read_text(), 'mine')
+        self.assertEqual(self.output('gossil-0.1.0'), 'gossil 0.1.0')
+
+    def test_an_unknown_old_version_keeps_no_copy(self):
+        self.version('0.1.0')
+        self.install()
+        (self.root / 'install/.crates2.json').unlink()
+        self.version('0.2.0')
+        done = self.install()
+        self.assertIn('recorded no version', done.stdout)
+        self.assertEqual(self.files(), ['gos', 'gossil'])
+
+    def test_the_same_version_again_keeps_the_old_copy(self):
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn('kept the old', done.stdout)
+        self.assertEqual(self.output('gossil-0.1.0'), 'gossil 0.1.0')
+
+    def test_a_failed_build_keeps_the_binary_and_the_older_copy(self):
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        self.version('0.3.0', broken=True)
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertEqual(self.output('gossil'), 'gossil 0.2.0')
+
+    def test_options_after_a_double_dash_go_to_cargo_install(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install('gos', '--', '--features', 'fast').returncode, 0)
+        self.assertEqual(self.output('gos'), 'gos 0.1.0 fast')
+
+    def test_an_install_root_of_the_cargo_config_does_not_split_the_folders(self):
+        """install-bin names its folder with --root, so cargo installs where the copies are kept."""
+        del self.env['CARGO_INSTALL_ROOT']
+        self.env['CARGO_HOME'] = str(self.root / 'install')
+        (self.project / '.cargo').mkdir()
+        (self.project / '.cargo/config.toml').write_text(f'[install]\nroot = "{self.root / "elsewhere"}"\n')
+        self.version('0.1.0')
+        self.install()
+        self.version('0.2.0')
+        self.install()
+        self.assertEqual(self.files(), ['gos', 'gos-0.1.0', 'gossil', 'gossil-0.1.0'])
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_a_name_installs_only_that_binary_and_an_unknown_name_fails(self):
+        self.version('0.1.0')
+        self.assertEqual(self.install('gos').returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ['gos'])
+        done = self.install('nope')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('no binary named nope', done.stderr)
+
+    def test_a_workspace_with_binaries_in_two_packages_needs_names(self):
+        (self.project / 'Cargo.toml').write_text('[workspace]\nmembers = ["a", "b"]\nresolver = "2"\n')
+        for name in ('a', 'b'):
+            (self.project / name / 'src').mkdir(parents=True)
+            (self.project / name / 'Cargo.toml').write_text(
+                f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2021"\n')
+            (self.project / name / 'src/main.rs').write_text('fn main() {}\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=self.project, env=self.env, check=True,
+                       capture_output=True)
+        done = self.install()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('name the binaries to install', done.stderr)
+        self.assertEqual(self.install('a', 'b').returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ['a', 'b'])
 
 
 class WarmCoverageSteps(unittest.TestCase):

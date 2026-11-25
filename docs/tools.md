@@ -17,6 +17,7 @@ Every project of the profile gets the base, even a project with no tool.
 | `just setup` | Downloads every dependency with `cargo fetch`, and makes or updates `Cargo.lock` |
 | `just build` | Builds every package of the workspace. Extra arguments go to cargo: `just build --release` |
 | `just rust::quick` | Runs the quick checks of a fix round, with no coverage: `fmt-check`, `lint`, `typecheck`, and the unit tests with a plain `cargo test`. The tests take the same targets as `just test`, so a project with only a binary works. Each check runs only when its tool is installed, which means the module of the profile has its recipe. The installer copies every recipe file, so a file alone does not show a tool. The first check that fails stops the rest. Extra arguments go to `cargo test`. Arguments that choose packages or targets, such as `-p core` or `--test api`, take the place of the targets: `just rust::quick -p core`. The installer also gives the project `just quick`, which runs it in each profile that has it. It is not a step of `just check`, so run `just check` once on the final tree |
+| `just install-bin [BIN...]` | Builds the release binaries with `cargo install --locked --force --path`, and puts them in the folder `bin` of `CARGO_INSTALL_ROOT`, else of `CARGO_HOME`, else of `~/.cargo`. With no `BIN`, it takes every binary of the package of the root `Cargo.toml`, else of the only package with binaries. Before it replaces a binary, it keeps the old one as `NAME-VERSION`, with the version that `cargo install` recorded, and removes the older such copy, so one old binary stays. It builds the working tree, with the default features, and uses the release build in `target/` again. It is not a step of `just check` |
 | `just version` | Prints the version of the project, `X.Y.Z`, from `[package]` or `[workspace.package]` of the root `Cargo.toml`, for the release tag. It prints nothing when there is none. It exits with 2 when the file cannot be read, or when the version is not semver. It is not a step of `just check` |
 
 The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.worktreedisposable`. The leading `/` keeps a module folder such as `src/target/` in git. That file lists the ignored files that a command can make again. Every report of a step goes to `target/`, so a step leaves no file that git sees.
@@ -131,6 +132,29 @@ An extra argument that chooses targets or packages, such as `--test api` or `-p 
 - **The `Cargo.toml` or `build.rs` of its package changed,** or `Cargo.lock`, or the `Cargo.toml` of a workspace that is no package.
 
 A target that reaches a module only through a re-export, such as `app::Thing`, is not chosen, and neither is one that reads a fixture at run time. The recipe prints each target that it runs, with the reason, and each target that it skips. With no target to run, it passes. A target that does not build fails the recipe, and a stale `Cargo.lock` exits with 2. It runs the targets by name, and exits with the codes of `test-paths`.
+### integration with nextest
+
+`cargo test` runs the test binaries one after another. A project can run the `integration` step through cargo nextest instead. nextest runs the tests of every test binary at the same time, each test in a process of its own. Set `JNPROFILE_RUST_NEXTEST=1` in the shell, or in the `env` of the CI job, and install the runner with `cargo install cargo-nextest --locked`.
+
+The step then runs `cargo llvm-cov nextest` with the same targets and the same report. A run with no test passes, as with `cargo test`. The `test` step keeps `cargo test`.
+
+Three things change with nextest:
+
+- **A test runs in its own process.** Tests of one file that share a `static`, or a `OnceLock` set by the first test, each see a fresh one. A test that passes with `cargo test` and fails with nextest may depend on such state.
+- **Filters are those of nextest.** A filter expression goes before `--`, as in `just integration -E 'test(api)'`. After `--`, a plain test name still filters.
+- **A test target with `harness = false` must answer `--list`,** as one built on libtest-mimic does. nextest first asks each test binary for its tests, and a plain `main` that does not answer stops the step.
+- **Tests that cannot share the machine need a name in `.config/nextest.toml`.** A test with a short timeout, or one that starts a program, may fail under the load of the others. nextest runs the tests of a test group one at a time. Each name in the filter must be one of the project, since nextest fails on a `binary(...)` that matches no binary:
+
+```toml
+[test-groups]
+serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(plan_cli_and_evidence) | binary(conformance)'
+test-group = 'serial'
+```
+
+An ignored test stays out of the run, as with `cargo test`.
 
 ## test-paths
 
