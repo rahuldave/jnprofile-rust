@@ -1184,7 +1184,10 @@ def integration_changed(args):
             print('integration-changed: the test targets did not build', file=sys.stderr, flush=True)
             return outcome(build.returncode, build.stderr)
     by_id = {package['id']: package for package in packages}
-    deps_folder = {Path(f).parent for a in artifacts for f in a.get('filenames', []) if Path(f).parent.name == 'deps'}
+    # The folders where rustc writes the dep-info of a binary: deps in the old layout of the build folder, and
+    # build/PACKAGE/HASH/out, one per unit, in the new one. Each is beside a test executable.
+    unit_folders = {Path(a['executable']).parent for a in artifacts
+                    if a.get('profile', {}).get('test') and a.get('executable')}
     tests, test_infos = [], set()
     for artifact in artifacts:
         kind = artifact['target']['kind']
@@ -1210,14 +1213,21 @@ def integration_changed(args):
                 if found:
                     files |= dep_info_at(Path(name).parent / f'{crate}-{found.group(1)}.d', root)
         else:
-            # A binary: each other deps/CRATE-*.d, since cargo names no hash for it. A unit-test build of the
-            # library under the same crate name only adds files of that package.
+            # A binary: each CRATE.d or CRATE-*.d in a folder of the units of its package, since cargo names no
+            # hash for it. A unit-test build of the library under the same crate name only adds files of that
+            # package.
             known = {Path(name).parent / f'{crate}-{m.group(1)}.d' for name in
                      (f for a in artifacts for f in a.get('filenames', []))
                      for m in [re.fullmatch(rf'lib{re.escape(crate)}-(\w+)\.\w+', Path(name).name)] if m}
-            for folder in deps_folder:
-                for info in folder.glob(f'{crate}-*.d'):
-                    if info not in test_infos and info not in known:
+            folders = set()
+            for folder in unit_folders:
+                if folder.name == 'deps':
+                    folders.add(folder)
+                elif folder.name == 'out' and folder.parent.parent.name == by_id[artifact['package_id']]['name']:
+                    folders |= {unit / 'out' for unit in folder.parent.parent.iterdir()}
+            for folder in folders:
+                for info in [*folder.glob(f'{crate}-*.d'), folder / f'{crate}.d']:
+                    if info.is_file() and info not in test_infos and info not in known:
                         files |= dep_info_at(info, root)
         owned[(artifact['package_id'], key, artifact['target']['name'])] = (files, artifact['target'])
     reasons = {(package_id, name): [] for package_id, name, _ in tests}
