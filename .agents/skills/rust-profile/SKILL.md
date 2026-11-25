@@ -21,7 +21,7 @@ first.
 
 | Tool | Recipes | What the steps check |
 |---|---|---|
-| none, always there | `setup`, `build`, `version`, `quick` | nothing; `quick` runs the checks of the installed tools in a fix round, with no coverage |
+| none, always there | `setup`, `build`, `version`, `quick`, `install-bin` | nothing; `quick` runs the checks of the installed tools in a fix round, with no coverage; `install-bin` installs the release binaries and keeps the last old one |
 | `lint` | `fmt`, `fmt-check`, `lint` | the format with rustfmt, and each clippy warning as an error |
 | `typecheck` | `typecheck` | the types of the code and the tests, with `cargo check` |
 | `test` | `test`, `coverage-check`, `test-paths` | the unit tests, and that the tests run each changed line |
