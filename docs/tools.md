@@ -61,6 +61,14 @@ The base adds `/target/` and `*.profraw` to `.gitignore`, and `/target/` to `.wo
 
 `coverage-check` runs `diff-cover` against `HEAD`, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes.
 
+In CI, a checkout has no such change, so against `HEAD` the step would check no line. When `CI` is set, the step counts the changes against a base commit. With the prose role, the base is that of `api-prose-check`, from `base_commit` of its `prose_gate.py`, so both steps check the same changes. That base covers each commit of a push to the default branch, and each commit of a branch. With no prose role, these rules hold:
+
+- **On a pull request,** the base is the merge base of `HEAD` and `origin/GITHUB_BASE_REF`, the branch that the pull request targets. So only the lines of the pull request count.
+- **On another event, such as a push,** the base is the first parent of `HEAD`. For a merge commit, the lines of the merged branch count once more. With no parent, `HEAD` is a first commit, and each line must run.
+- **On `pull_request_target`,** the checkout is the base branch, so the step fails with exit code 2.
+
+A shallow clone, or one that lacks the base, fails the step with exit code 2, so check out the history, as with `fetch-depth: 0` of `actions/checkout`. In CI, the step reads `coverage-exclude.txt` and `generated.txt` from the base, so a change cannot exempt its own code.
+
 An untracked path that is not a file, such as a link to a folder, does not count. The jnterfaces installer makes such a link, `.claude/skills/rust-profile`. `diff-cover` cannot read it, so the step leaves it out.
 
 Such a path whose name holds a `\` stops the step. `diff-cover` reads each `\` as a `/`, so to leave out that path it would leave out other files too. Rename it, remove it or add it to `.gitignore`.
@@ -77,6 +85,7 @@ The build of the coverage run stays warm between checks. Cargo compiles again on
   - each variable whose name starts with `CARGO` or `RUST`;
   - each `Cargo.toml` and `Cargo.lock`, `rust-toolchain` and the cargo config. A change of one can give each test binary a new name, and the old binary would stay beside the new one. Its lines would then count as lines that no test runs.
 - A build may have a folder of its own, from `build.build-dir`, `CARGO_LLVM_COV_TARGET_DIR` or `CARGO_LLVM_COV_BUILD_DIR`. Then the step cleans the whole workspace on each run.
+- A full clean also removes the builds of each workspace package in both layouts of cargo, `deps` and `build/PACKAGE/HASH`. cargo 1.95 puts a test binary in `deps`, and a newer cargo puts it in `build`. `cargo llvm-cov clean` cleans only its own layout, so after a change of the toolchain the old test binaries would stay. `llvm-cov` would read them too, and their lines, of an older build, would count as lines that no test runs, also lines that are now comments.
 - The dependency builds stay in each case.
 
 The step saves the fingerprint in `target/llvm-cov-target` after a run passes, with the commit of HEAD. A failed run leaves no fingerprint, and the next run cleans the whole workspace. So does a run with extra arguments, such as `--config`.
