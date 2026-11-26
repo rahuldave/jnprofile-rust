@@ -112,14 +112,15 @@ def top():
     return Path(os.path.realpath('.'))
 
 
-def parent_list(path):
-    """The patterns of the list file PATH in the parent commit: one for each line that is not blank or a comment.
+def parent_list(path, commit='HEAD'):
+    """The patterns of the list file PATH in COMMIT: one for each line that is not blank or a comment.
 
-    A missing parent or a file that the parent does not have gives no patterns.
+    COMMIT is HEAD, the parent of the next commit, or in CI the base of coverage-check, so a change never exempts its
+    own code. A missing parent or a file that the commit does not have gives no patterns.
     """
     if not has_parent():
         return []
-    run = git('show', f'HEAD:./{path}')
+    run = git('show', f'{commit}:./{path}')
     if run.returncode:
         return []
     return [line.strip() for line in run.stdout.splitlines() if line.strip() and not line.strip().startswith('#')]
@@ -764,6 +765,37 @@ def changed_packages(meta, folder, base='HEAD'):
     return sorted(cleaned)
 
 
+def full_clean(meta, folder):
+    """Clean the builds of the workspace in the coverage folder FOLDER, in both layouts of cargo, and return the code.
+
+    cargo llvm-cov clean --workspace cleans only the layout of the cargo that runs it. cargo 1.95 puts a test binary
+    in deps, a newer one in build/PACKAGE/HASH/out. After a change of the toolchain, the binaries of the other layout
+    stay, and llvm-cov reads them too: their lines, of an older build, then count as lines that no test runs, also
+    on what is now a comment. So the builds of each workspace package go in both layouts. The other builds stay.
+    """
+    code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode
+    if code or not folder.is_dir():
+        return code
+    members = set(meta.get('workspace_members') or [package['id'] for package in meta['packages']])
+    packages = [package for package in meta['packages'] if package['id'] in members]
+    crates = {target['name'].replace('-', '_') for package in packages for target in package.get('targets', [])}
+    names = {package['name'] for package in packages}
+    alternatives = '|'.join(map(re.escape, sorted(crates)))
+    stale = re.compile(rf'(?:lib)?(?:{alternatives})-[0-9a-f]+(?:\..*)?') if crates else None
+    for deps in folder.glob('**/deps'):
+        for path in deps.iterdir() if stale and deps.is_dir() else []:
+            if stale.fullmatch(path.name):
+                shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink(missing_ok=True)
+    for build in folder.glob('**/build'):
+        for name in names:
+            unit = build / name
+            # The new layout: build/PACKAGE/HASH/{out,fingerprint}. The old one has build/PACKAGE-HASH instead.
+            if unit.is_dir() and any((child / 'out').is_dir() or (child / 'fingerprint').is_dir()
+                                     for child in unit.iterdir()):
+                shutil.rmtree(unit)
+    return 0
+
+
 def clean_coverage_build():
     """Clean what the coverage build of the next run needs to build again, and keep the rest warm.
 
@@ -810,14 +842,14 @@ def clean_coverage_build():
         why = ('the first run or a new build fingerprint' if not warm else
                'a build of a commit that this clone does not have')
         print(f'coverage: a full clean of the workspace, for {why}', flush=True)
-        return subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode, save
+        return full_clean(meta, folder), save
     if built != head:
         print(f'coverage: the build is of commit {built[:12]}, so the changes count against it', flush=True)
     packages = changed_packages(meta, folder, built)
     if packages is None:
         stamp.unlink(missing_ok=True)
         print('coverage: a full clean of the workspace, since no smaller clean is sure', flush=True)
-        return subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode, save
+        return full_clean(meta, folder), save
     code = subprocess.run(['cargo', 'llvm-cov', 'clean', '--profraw-only', '--locked']).returncode
     for package in packages if code == 0 else []:
         print(f'coverage: clean {package}, which holds a changed Rust file', flush=True)
@@ -944,8 +976,62 @@ def missed_lines(text, root):
     return [f'{path}:{number}' for path, number in sorted(missed)]
 
 
+def coverage_base():
+    """The commit that coverage-check counts the changed lines against, '' for a first commit, or None after an
+    error that it printed.
+
+    Out of CI it is HEAD, so the changes are those of the working tree, not yet committed. In CI, a checkout has no
+    such change, and against HEAD the step would check no line. So with CI set, the base comes from base_commit of
+    prose_gate.py of the prose role when the project has it, so that api-prose-check checks the same changes. With
+    no prose role, the rules are these:
+
+    - pull_request: the merge base of HEAD and origin/GITHUB_BASE_REF, the branch that the pull request targets.
+    - pull_request_target checks out the base branch, so there is no change to check: an error.
+    - any other event, as a push: the first parent of HEAD. With no parent, HEAD is a first commit.
+
+    A shallow clone is an error, since its history is cut off: fetch it, as with fetch-depth: 0.
+    """
+    if not ci_named():
+        return 'HEAD'
+    try:
+        gate = load_gate()
+    except Exception as exc:  # noqa: BLE001 - any failure of the import of another package is an error of the step
+        print(f'coverage-check: {PROSE_GATE} cannot be loaded: {exc}', file=sys.stderr)
+        return None
+    if gate is not None and hasattr(gate, 'base_commit'):
+        try:
+            commit, name = gate.base_commit(Path(git('rev-parse', '--show-toplevel').stdout.strip()), None)
+        except Exception as exc:  # noqa: BLE001 - a failure of base_commit of another package is an error
+            print(f'coverage-check: base_commit of {PROSE_GATE} failed: {exc!r}', file=sys.stderr)
+            return None
+        if commit is None:
+            print(f'coverage-check: {name}', file=sys.stderr)
+            return None
+        # The empty tree is the base of a first commit or a new branch: each line must run.
+        return '' if git('cat-file', '-t', commit).stdout.strip() == 'tree' else commit
+    if os.environ.get('GITHUB_EVENT_NAME', '') == 'pull_request_target':
+        print('coverage-check: the event pull_request_target checks out the base branch, so there is no change to '
+              'check. Run the workflow on the event pull_request', file=sys.stderr)
+        return None
+    if git('rev-parse', '--is-shallow-repository').stdout.strip() != 'false':
+        print('coverage-check: the clone is shallow, so its history is cut off and the changed lines cannot be told. '
+              'Fetch the history, as with fetch-depth: 0', file=sys.stderr)
+        return None
+    target = os.environ.get('GITHUB_BASE_REF', '').strip()
+    if target:
+        found = git('merge-base', 'HEAD', f'refs/remotes/origin/{target}')
+        if found.returncode:
+            print(f'coverage-check: the clone has no merge base of HEAD and origin/{target}, the target of the pull '
+                  'request, so it cannot tell the changed lines. Fetch the history, as with fetch-depth: 0',
+                  file=sys.stderr)
+            return None
+        return found.stdout.strip()
+    found = git('rev-parse', '--verify', '--quiet', 'HEAD^1^{commit}')
+    return found.stdout.strip() if found.returncode == 0 else ''
+
+
 def coverage():
-    """Fail on each changed line of code that the tests do not run, as diff-cover against HEAD finds it.
+    """Fail on each changed line of code that the tests do not run, as diff-cover against coverage_base finds it.
 
     It reads the report of test, and that of integration when it counts. A line that one of them runs passes.
     The files of generated.txt and coverage-exclude.txt of the parent commit do not count. On the first commit,
@@ -959,7 +1045,10 @@ def coverage():
             return 1
     texts = [path.read_text() for path in reports]
     root = top()
-    if not has_parent():
+    base = coverage_base() if has_parent() else ''
+    if base is None:
+        return 2
+    if not base:
         print('coverage-check: the first commit, so every line of code must run in the tests', flush=True)
         missed = missed_lines(merge_lcov(texts), root)
         for line in missed:
@@ -968,6 +1057,8 @@ def coverage():
             print('coverage-check: write tests for the lines that no test runs', file=sys.stderr)
             return 1
         return 0
+    if base != 'HEAD':
+        print(f'coverage-check: in CI, the changed lines count against commit {base[:12]}', flush=True)
     skipped = unreadable_untracked()
     slashed = [path for path in skipped if '\\' in path]
     for path in slashed:
@@ -977,15 +1068,16 @@ def coverage():
               'them without skipping other files too. Rename them, remove them or add them to .gitignore',
               file=sys.stderr)
         return 1
-    excluded = matcher(parent_list(GENERATED) + parent_list(COVERAGE_EXCLUDE))
+    # The lists of the base: in CI, HEAD is the commit under test, and a change must not exempt its own code.
+    excluded = matcher(parent_list(GENERATED, base) + parent_list(COVERAGE_EXCLUDE, base))
     WORK.mkdir(parents=True, exist_ok=True)
     kept = WORK / 'lcov.info'
     kept.write_text(filter_lcov(merge_lcov(texts), root, excluded))
     code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept),
-                           '--compare-branch', 'HEAD', '--include-untracked', '--fail-under', '100',
+                           '--compare-branch', base, '--include-untracked', '--fail-under', '100',
                            *(['--exclude', *exclude_patterns(skipped)] if skipped else [])]).returncode
     lines = set().union(*(reported(text, root) for text in texts))
-    missing = unreported(changed_code(), lines, excluded)
+    missing = unreported(changed_code(base), lines, excluded)
     for path in missing:
         print(f'{path}: a changed file that is absent from the coverage report')
     if missing:

@@ -104,8 +104,10 @@ exec "$@"
 
 def run(args, cwd, env=None, check=False):
     """Run ARGS in CWD with no input, and return the finished process with its output as text."""
-    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                          env=env or os.environ.copy())
+    # The project of the lab is a scratch repository, not the pull request of CI, so its steps run as on a machine.
+    env = {k: v for k, v in (env or os.environ).items()
+           if k not in ('CI', 'GITHUB_BASE_REF', 'GITHUB_REF', 'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH')}
+    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
     if check and done.returncode:
         raise AssertionError(f'{args} failed with {done.returncode}:\n{done.stdout}\n{done.stderr}')
     return done

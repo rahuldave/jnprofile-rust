@@ -390,6 +390,23 @@ class WarmCoverage(StandInCargo):
         stamp.write_text(stamp.read_text().rpartition('\ncommit ')[0])
         self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
 
+    def test_a_full_clean_removes_the_workspace_builds_of_both_layouts_and_keeps_the_others(self):
+        """cargo 1.95 builds into deps, a newer cargo into build/PACKAGE/HASH: a toolchain change leaves the other."""
+        debug = self.root / 'target/llvm-cov-target/debug'
+        gone = ['deps/a-0123abcd', 'deps/liba-0123abcd.rlib', 'deps/b_inner-99ff.d', 'deps/c-0a.long.rcgu.o',
+                'build/a/4567/out/a-4567', 'build/b-inner/89ab/fingerprint/x']
+        kept = ['deps/serde-0123abcd', 'deps/aa-0123abcd', 'deps/a.d', 'build/serde/4567/out/x', 'build/a-0123abcd/x',
+                'build/c/plain-file-dir/x']
+        for name in gone + kept:
+            (debug / name).parent.mkdir(parents=True, exist_ok=True)
+            (debug / name).write_text('')
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
+        self.assertEqual([name for name in gone if (debug / name).exists()], [])
+        self.assertEqual([name for name in kept if not (debug / name).exists()], [])
+        (debug / 'deps/a-0123abcd').write_text('')
+        self.check()
+        self.assertTrue((debug / 'deps/a-0123abcd').exists(), 'a warm run removes nothing')
+
     def test_each_package_that_holds_a_changed_rust_file_is_cleaned_and_the_others_stay(self):
         self.check()
         (self.root / 'b/inner/src/lib.rs').write_text('pub fn g() {}\n')
@@ -569,6 +586,59 @@ class WarmCoverageCargo(unittest.TestCase):
         self.assertNotIn('DA:4,0', after)
 
 
+
+def toolchains(*names):
+    """True when rustup has each toolchain of NAMES."""
+    done = subprocess.run(['rustup', 'toolchain', 'list'], capture_output=True, text=True) if shutil.which('rustup') \
+        else None
+    return bool(done) and done.returncode == 0 and all(name in done.stdout for name in names)
+
+
+@unittest.skipUnless(shutil.which('cargo-llvm-cov') and toolchains('1.95.0', '1.100.0'),
+                     'needs rustup 1.95.0 and 1.100.0')
+class ToolchainSwitchCargo(unittest.TestCase):
+    """The real cargo llvm-cov: after a build of cargo 1.95, which uses deps, a run of 1.100 counts no old line."""
+
+    def test_the_binaries_of_the_old_layout_count_no_line(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / 'src').mkdir()
+        (root / 'Cargo.toml').write_text('[package]\nname = "w"\nversion = "0.1.0"\nedition = "2021"\n')
+        # A generic executor: cargo 1.95 maps the binding of cx as a region of its own, 1.100 does not.
+        (root / 'src/lib.rs').write_text(
+            'pub async fn two() -> u32 {\n    2\n}\n\n'
+            'pub fn run<F: std::future::Future>(f: F) -> F::Output {\n    let mut f = std::pin::pin!(f);\n'
+            '    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());\n    loop {\n'
+            '        if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {\n            return v;\n'
+            '        }\n    }\n}\n\n'
+            '#[cfg(test)]\nmod t {\n    #[test]\n    fn a() {\n'
+            '        assert_eq!(super::run(super::two()), 2);\n    }\n}\n')
+        (root / '.gitignore').write_text('/target/\n')
+        env = {k: v for k, v in os.environ.items() if k not in ('JLOG_RUN', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR',
+                                                                *steps.BASE_VARIABLES)}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        for args in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'one']):
+            subprocess.run(['git', *args], cwd=root, env=env, check=True, capture_output=True)
+        subprocess.run(['cargo', 'generate-lockfile', '--offline'], cwd=root, env=env, check=True, capture_output=True)
+        old = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, old)
+
+        def run(toolchain):
+            with mock.patch.dict(os.environ, dict(env, RUSTUP_TOOLCHAIN=toolchain), clear=True), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code, save = steps.clean_coverage_build()
+                self.assertEqual(code, 0)
+                done = subprocess.run([*steps.COVERAGE, '--lcov', '--output-path', 'r.lcov'], capture_output=True,
+                                      text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                save()
+            return sorted(line for line in Path('r.lcov').read_text().splitlines() if line.endswith(',0'))
+        first = run('1.95.0')
+        self.assertEqual(run('1.100.0'), first)
+        self.assertNotIn('DA:7,0', first)
 
 @unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo'), 'needs cargo llvm-cov')
 class QuickTestCargo(unittest.TestCase):
@@ -1362,6 +1432,12 @@ class Repository(unittest.TestCase):
             os.path.realpath(path): path.stem for path in self.root.glob('**/tests/*.rs')})
         names.start()
         self.addCleanup(names.stop)
+        # coverage-check counts against the base of CI when CI is set, as on GitHub, where these tests run too.
+        no_ci = mock.patch.dict(os.environ)
+        no_ci.start()
+        self.addCleanup(no_ci.stop)
+        for key in steps.BASE_VARIABLES:
+            os.environ.pop(key, None)
 
     def git(self, *args):
         subprocess.run(['git', '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', *args], cwd=self.root,
@@ -1490,6 +1566,120 @@ class Repository(unittest.TestCase):
             return real(command, *args, **kwargs)
         with mock.patch.object(steps.subprocess, 'run', side_effect=run):
             yield calls
+
+    def history(self):
+        """main: one, two; the branch work from one: three, four; main then moves on: five. HEAD is on work."""
+        self.files('src/lib.rs')
+        for name in ('one', 'two'):
+            (self.root / 'src' / f'{name}.rs').write_text(name)
+            self.git('add', '-A')
+            self.git('commit', '-q', '-m', name)
+        self.git('branch', '-M', 'main')
+        self.git('checkout', '-q', '-b', 'work', 'HEAD~1')
+        for name in ('three', 'four'):
+            (self.root / 'src' / f'{name}.rs').write_text(name)
+            self.git('add', '-A')
+            self.git('commit', '-q', '-m', name)
+        self.git('checkout', '-q', 'main')
+        (self.root / 'src/five.rs').write_text('five')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'five')
+        self.git('update-ref', 'refs/remotes/origin/main', 'main')
+        self.git('checkout', '-q', 'work')
+
+    def sha(self, ref):
+        return subprocess.run(['git', 'rev-parse', ref], cwd=self.root, capture_output=True, text=True).stdout.strip()
+
+    def test_the_base_is_head_out_of_ci_and_the_merge_base_on_a_pull_request(self):
+        self.history()
+        self.assertEqual(steps.coverage_base(), 'HEAD')
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request', GITHUB_BASE_REF='main'):
+            self.assertEqual(steps.coverage_base(), self.sha('main~2'))
+            self.assertEqual(steps.changed_code(steps.coverage_base()), ['src/four.rs', 'src/three.rs'])
+
+    def test_on_a_push_the_base_is_the_first_parent(self):
+        self.history()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='push'):
+            self.assertEqual(steps.coverage_base(), self.sha('HEAD~1'))
+            self.git('checkout', '-q', 'main')
+            self.git('merge', '-q', '--no-ff', '-m', 'merge', 'work')
+            self.assertEqual(steps.coverage_base(), self.sha('main^1'))
+            self.assertEqual(steps.changed_code(steps.coverage_base()), ['src/four.rs', 'src/three.rs'])
+
+    def test_a_clone_without_the_base_is_an_error(self):
+        self.history()
+        self.write_reports([], [])
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request', GITHUB_BASE_REF='gone'), \
+                contextlib.redirect_stderr(err):
+            self.assertIsNone(steps.coverage_base())
+            self.assertEqual(steps.coverage(), 2)
+        self.assertIn('Fetch the history, as with fetch-depth: 0', err.getvalue())
+
+    def test_in_ci_diff_cover_and_the_missing_files_count_against_the_base(self):
+        self.history()
+        self.write_reports([('src/three.rs', 1, 1)], [])
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request', GITHUB_BASE_REF='main'), \
+                self.diff_cover() as calls, contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(steps.coverage(), 1)
+        diff_cover, = calls
+        self.assertEqual(diff_cover[diff_cover.index('--compare-branch') + 1], self.sha('main~2'))
+        self.assertIn('src/four.rs: a changed file that is absent from the coverage report', out.getvalue())
+        self.assertNotIn('src/five.rs', out.getvalue())
+
+    def test_the_first_push_of_a_repository_checks_every_line(self):
+        self.commit_one()
+        self.write_reports([('src/lib.rs', 1, 0)], [])
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='push'), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(steps.coverage_base(), '')
+            self.assertEqual(steps.coverage(), 1)
+        self.assertIn('the first commit, so every line of code must run', out.getvalue())
+        self.assertIn('src/lib.rs:1: no test runs this line', out.getvalue())
+
+    def test_pull_request_target_and_a_shallow_clone_are_errors(self):
+        self.history()
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request_target', GITHUB_BASE_REF='main'), \
+                contextlib.redirect_stderr(err):
+            self.assertIsNone(steps.coverage_base())
+        self.assertIn('pull_request_target checks out the base branch', err.getvalue())
+        (self.root / '.git/shallow').write_text(self.sha('main~2') + '\n')
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='push'), contextlib.redirect_stderr(err):
+            self.assertIsNone(steps.coverage_base())
+        self.assertIn('the clone is shallow', err.getvalue())
+
+    def test_with_the_prose_role_the_base_is_that_of_its_gate(self):
+        self.history()
+        gate = self.root / steps.PROSE_GATE
+        gate.parent.mkdir(parents=True)
+        for answer, want in ((f"('{self.sha('main~2')}', 'x')", self.sha('main~2')),
+                             ("('4b825dc642cb6eb9a060e54bf8d69288fbee4904', 'x')", ''),
+                             ("(None, 'no default branch')", None)):
+            gate.write_text(f'def base_commit(root, option):\n    return {answer}\n')
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='push'), contextlib.redirect_stderr(err):
+                self.assertEqual(steps.coverage_base(), want, answer)
+        self.assertIn('coverage-check: no default branch', err.getvalue())
+
+    def test_in_ci_a_change_cannot_exempt_its_own_code(self):
+        self.history()
+        (self.root / '.agents').mkdir()
+        (self.root / '.agents/coverage-exclude.txt').write_text('src/three.rs\n')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'exempt')
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request', GITHUB_BASE_REF='main'):
+            base = steps.coverage_base()
+            self.assertEqual(steps.parent_list(steps.COVERAGE_EXCLUDE, base), [])
+        self.assertEqual(steps.parent_list(steps.COVERAGE_EXCLUDE), ['src/three.rs'])
+        self.write_reports([('src/four.rs', 1, 1)], [])
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, CI='true', GITHUB_EVENT_NAME='pull_request', GITHUB_BASE_REF='main'), \
+                self.diff_cover(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(steps.coverage(), 1)
+        self.assertIn('src/three.rs: a changed file that is absent from the coverage report', out.getvalue())
 
     def first_commit(self):
         """Run coverage on the first commit, as the script, and return the finished process."""
