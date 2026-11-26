@@ -346,6 +346,50 @@ class WarmCoverage(StandInCargo):
         self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
         self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked']))
 
+    def commit(self, message):
+        subprocess.run(['git', 'add', '-A'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-q', '-m', message], cwd=self.root, check=True)
+
+    def test_a_change_committed_since_the_saved_run_is_cleaned(self):
+        """A cache of CI or a seeded worktree brings a build of an older commit: its changes count from that one."""
+        self.check()
+        (self.root / 'b/inner/src/lib.rs').write_text('pub fn g() {}\n')
+        self.commit('two')
+        folder = self.root / 'target/llvm-cov-target'
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked',
+                                            f'clean --locked --target-dir {folder} -p b-inner',
+                                            f'clean --locked --target-dir {folder} -p c']))
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked']))
+
+    def test_a_soft_reset_after_the_saved_run_still_cleans_the_changes_against_head(self):
+        self.check()
+        (self.root / 'b/inner/src/lib.rs').write_text('pub fn g() {}\n')
+        self.commit('two')
+        self.check()
+        subprocess.run(['git', 'reset', '-q', '--soft', 'HEAD~1'], cwd=self.root, check=True)
+        folder = self.root / 'target/llvm-cov-target'
+        self.assertIn(f'clean --locked --target-dir {folder} -p b-inner', self.check()[1])
+
+    def test_a_commit_with_no_rust_change_keeps_the_build_warm(self):
+        self.check()
+        (self.root / 'b/README.md').write_text('words\n')
+        self.commit('two')
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --profraw-only --locked']))
+
+    def test_a_stamp_of_a_commit_that_the_clone_does_not_have_cleans_the_workspace(self):
+        self.check()
+        stamp = self.root / 'target/llvm-cov-target/jnprofile-rust-build.txt'
+        text = stamp.read_text()
+        self.assertRegex(text, r'\ncommit [0-9a-f]{40}\n$')
+        stamp.write_text(text.rpartition('\ncommit ')[0] + '\ncommit ' + 'ab' * 20 + '\n')
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
+
+    def test_a_stamp_with_no_commit_cleans_the_workspace(self):
+        self.check()
+        stamp = self.root / 'target/llvm-cov-target/jnprofile-rust-build.txt'
+        stamp.write_text(stamp.read_text().rpartition('\ncommit ')[0])
+        self.assertEqual(self.check(), (0, ['llvm-cov clean --workspace --locked']))
+
     def test_each_package_that_holds_a_changed_rust_file_is_cleaned_and_the_others_stay(self):
         self.check()
         (self.root / 'b/inner/src/lib.rs').write_text('pub fn g() {}\n')
@@ -816,6 +860,51 @@ class IntegrationChangedWorkspace(unittest.TestCase):
                               cwd=root, env=env, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn('runs a --test t, for Cargo.toml of the workspace', done.stdout)
+
+
+class NextestFilters(unittest.TestCase):
+    """The names of test(...) in .config/nextest.toml, against the tests that nextest saw."""
+
+    def test_each_matcher_of_nextest(self):
+        names = {'api::plan_cli_and_evidence', 'slow'}
+        for matcher, want in (('plan_cli', True), ('~plan_cli', True), ('=slow', True), ('=plan_cli', False),
+                              ('/^api::plan/', True), ('/^plan/', False), ('#api::*', True), ('#plan*', False),
+                              ('nope', False), ('/(/', True)):
+            self.assertEqual(steps.filter_matches(matcher, names), want, matcher)
+
+    def test_the_names_of_the_lines_of_nextest(self):
+        text = ('        SKIP [         ] (───) w::api slow\n        PASS [   0.010s] (1/2) w::api a::b\n'
+                '     Summary [   0.013s] 1 test run: 1 passed, 1 skipped\n')
+        self.assertEqual(set(steps.NEXTEST_LINE.findall(text)), {'slow', 'a::b'})
+        self.assertEqual(steps.NEXTEST_LINE.findall('        PASS [   0.015s] (2/4) w::mimic my spaced test\n'),
+                         ['my spaced test'])
+
+    def test_the_matchers_of_a_filter(self):
+        self.assertEqual(steps.test_matchers('test(=a) | not test( b ) & test(/a\\)|[)]/) | rdeps(x) | test(#c*)'),
+                         ['=a', 'b', '/a\\)|[)]/', '#c*'])
+
+    def test_the_filters_of_every_profile_and_script_are_read(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(os.path.realpath(temp.name))
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text(
+            "[profile.ci]\ndefault-filter = 'not test(gone)'\n\n[[profile.ci.overrides]]\n"
+            "filter = 'test(a) & package(my-test)'\nslow-timeout = '1m'\n")
+        old = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, old)
+        self.assertEqual(steps.unmatched_filters({'a'}), ['test(gone)'])
+        (root / 'lib.rs').write_text('#[test]\nfn gone() {}\n')
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        self.assertEqual(steps.unmatched_filters({'a'}), [], 'a unit test of the project counts')
+        (root / '.config/nextest.toml').write_text(
+            "[profile.ci]\ndefault-filter = 'test(=gon) | test(=t::gone) | test(on)'\n")
+        self.assertEqual(steps.unmatched_filters(set()), ['test(=gon)'])
+        (root / '.config/nextest.toml').write_text('not toml [')
+        self.assertEqual(steps.unmatched_filters(set()), [])
+
+
 @unittest.skipUnless(shutil.which('cargo-llvm-cov') and shutil.which('cargo-nextest'),
                      'needs cargo llvm-cov and nextest')
 class NextestCargo(unittest.TestCase):
@@ -883,6 +972,28 @@ class NextestCargo(unittest.TestCase):
         (root / '.config/nextest.toml').write_text(example)
         done = self.integration(root, env)
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+
+    def test_a_filter_name_that_matches_no_test_fails_the_step(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() {}\n#[test]\n#[ignore]\nfn slow_one() {}\n'})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text(
+            "[test-groups]\nserial = { max-threads = 1 }\n\n[[profile.default.overrides]]\n"
+            "filter = 'test(=a) | test(slow) | test(nope) | binary(api)'\ntest-group = 'serial'\n")
+        done = self.integration(root, env)
+        self.assertEqual(done.returncode, 1, done.stdout[-3000:])
+        self.assertIn('the filter test(nope) in .config/nextest.toml matches no test', done.stderr)
+        self.assertNotIn('test(=a)', done.stderr)
+        self.assertNotIn('test(slow)', done.stderr)
+
+    def test_a_users_status_level_stays_and_turns_the_check_off(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() {}\n'})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text("[[profile.default.overrides]]\nfilter = 'test(nope)'\n"
+                                                    "slow-timeout = '1m'\n")
+        self.assertEqual(self.integration(root, env).returncode, 1)
+        done = self.integration(root, dict(env, NEXTEST_STATUS_LEVEL='fail'))
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        self.assertNotIn('PASS [', done.stdout)
 
     def test_a_filter_expression_goes_before_the_double_dash(self):
         root, env = self.project({'api.rs': '#[test]\nfn a() {}\n#[test]\nfn b() { panic!("b ran"); }\n'})
