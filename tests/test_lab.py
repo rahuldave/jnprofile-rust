@@ -3,7 +3,7 @@
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
 SKILL_PACKAGES_DIR/jnterfaces, else in jnterfaces next to the main clone of this repository, also from a worktree.
 BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39, the order of #52, and the version floors of
-#57 and jlog v0.3.0 of #62. The fixed commit
+#57, and jlog v0.5.0 of jnterfaces v0.5.2. The fixed commit
 keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
 tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that
@@ -45,10 +45,11 @@ JNTERFACES = Path(os.environ.get('JNTERFACES')
                   or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else main_clone(REPO).parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#62. It installs the programs of a profile (#39), runs integration before coverage-check
-# (#52), runs integration once in just verify (#54), pins smalldocs 0.5.12 (#55), reads the version floors of
-# programs (#57), and installs jlog v0.3.0 from its release binary (#62).
-BASE = '99b12a5a9b25931f8c98897fd74e6fc061599163'
+# The merge of jnterfaces#88, the release v0.5.2. It installs the programs of a profile (#39), runs integration
+# before coverage-check (#52), runs integration once in just verify (#54), reads the version floors of programs
+# (#57), pins smalldocs 0.5.13 (#82), writes rust-toolchain.toml when a project has none (#84), and installs jlog
+# v0.5.0 from its release binary.
+BASE = '9e1f22dbaa423c4990493b883462663c14564858'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
@@ -134,6 +135,17 @@ def stand_in(root, name, skill):
 
 # What the installer prints before it installs a program.
 INSTALLING = 'failed, so the installer runs'
+# Since jnterfaces#84, the installer pins rust-toolchain.toml to an exact version, as 1.100.0. A machine that has
+# that compiler only as the channel stable, as the runners of GitHub, then installs the pin once: not a program.
+PIN_INSTALL = 'rustup show active-toolchain failed, so the installer runs for the rust profile, in the project ' \
+              'folder: rustup toolchain install'
+
+
+def installs(out):
+    """Whether the output OUT of an install installs a program, besides the toolchain of the pin it just wrote."""
+    if 'Wrote rust-toolchain.toml' in out:
+        out = '\n'.join(line for line in out.splitlines() if line != PIN_INSTALL)
+    return INSTALLING in out
 PROFILE = json.loads((REPO / 'profile.json').read_text())
 
 
@@ -360,6 +372,17 @@ class Pin(unittest.TestCase):
                 self.assertEqual(ci_programs.meets({'version': floor}, output, errors), theirs)
 
 
+class Installs(unittest.TestCase):
+    """installs: the install of the toolchain of a pin that the installer just wrote is not a program."""
+
+    def test_only_the_pin_that_the_installer_wrote_is_allowed(self):
+        wrote = 'Wrote rust-toolchain.toml with the channel 1.100.0.'
+        self.assertFalse(installs(f'{wrote}\n{PIN_INSTALL}\ninfo: installed'))
+        self.assertTrue(installs(PIN_INSTALL))
+        self.assertTrue(installs(f'{wrote}\n{PIN_INSTALL}\ncargo-deny --version failed, so the installer runs'))
+        self.assertFalse(installs('nothing to install'))
+
+
 @unittest.skipUnless(READY, WHY)
 class RustLab(unittest.TestCase):
     """Each test gets a copy of one Cargo project that has the profile installed and one commit."""
@@ -562,7 +585,7 @@ fn settings_default_roundtrip_and_getter() {
         stack = json.loads((self.packages / 'jnterfaces/stack.json').read_text())
         self.assertEqual({'rust': stack['profiles']['rust']}, doc_entry())
         self.assertEqual(self.installed.returncode, 0, self.out(self.installed))
-        self.assertNotIn(INSTALLING, self.out(self.installed))
+        self.assertFalse(installs(self.out(self.installed)), self.out(self.installed))
         done = install(self.packages, self.app, '--check')
         self.assertNotIn('Missing program', self.out(done))
         self.assertNotIn('are not checked', self.out(done))
@@ -994,7 +1017,7 @@ fn settings_default_roundtrip_and_getter() {
             self.skipTest(f'needs the programs {", ".join(missing)}, which the lab must not install')
         done = install(self.packages, self.dir, 'toml')
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn(INSTALLING, self.out(done))
+        self.assertFalse(installs(self.out(done)), self.out(done))
         self.assertTrue((self.dir / '.agents/just/rust/toml.just').is_file())
         done = self.just('rust', 'toml-check')
         self.assertEqual(done.returncode, 0, self.out(done))

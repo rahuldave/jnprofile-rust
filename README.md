@@ -36,12 +36,12 @@ just uninstall docstring
 just install docstring
 ```
 
-The machine needs Rust from rustup, and `just`, `uv`, `git` and jlog v0.3.0
+The machine needs Rust from rustup, and `just`, `uv`, `git` and jlog v0.5.0
 for jnterfaces. This command installs the release binary of jlog into
 `~/.local/bin`, which must be on `PATH`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rahuldave/jlog/v0.3.0/scripts/install.sh | sh -s -- --tag v0.3.0
+curl -fsSL https://raw.githubusercontent.com/rahuldave/jlog/v0.5.0/scripts/install.sh | sh -s -- --tag v0.5.0
 ```
 
 The profile installs `rustfmt`, `clippy`,
@@ -65,7 +65,7 @@ for the tool `toml`. For the tool `api`, it installs the nightly toolchain
 ## The lab
 
 The lab is a test that installs the profile into a temporary Cargo project and
-runs each step. It needs a clone of jnterfaces with commit `99b12a5`, next to
+runs each step. It needs a clone of jnterfaces with commit `9e1f22d`, next to
 this repository or in the folder that the variable `JNTERFACES` names. A
 worktree finds the clone next to its main clone. The lab
 copies jnterfaces at that commit, and leaves the clone alone. Run the lab and
