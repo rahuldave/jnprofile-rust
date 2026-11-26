@@ -141,6 +141,8 @@ A target that reaches a module only through a re-export, such as `app::Thing`, i
 
 The step then runs `cargo llvm-cov nextest` with the same targets and the same report. A run with no test passes, as with `cargo test`. The `test` step keeps `cargo test`.
 
+The step runs the tests that `cargo test` runs. A `default-filter` of `.config/nextest.toml` could leave a test or a whole test binary out, so the step passes `--ignore-default-filter`. The `retries` of the config could pass a test that failed once, so the step passes `--retries 0`. A user who gives one of these flags or `--no-tests` before `--` keeps it, as in `just integration --retries 2`.
+
 Four things change with nextest:
 
 - **A test runs in its own process.** Tests of one file that share a `static`, or a `OnceLock` set by the first test, each see a fresh one. A test that passes with `cargo test` and fails with nextest may depend on such state.
