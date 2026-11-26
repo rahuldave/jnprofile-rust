@@ -481,14 +481,26 @@ def write_launcher(launcher, helper):
 NEXTEST = 'JNPROFILE_RUST_NEXTEST'
 
 
-def coverage_command(step):
+def coverage_command(step, args=()):
     """The cargo llvm-cov command of STEP: COVERAGE, or for integration with NEXTEST set to 1, cargo llvm-cov nextest.
 
-    nextest fails a run with no test by default, and the step passes it, as cargo test does.
+    With nextest, the step runs the tests that cargo test runs. nextest fails a run with no test by default, and the
+    step passes it, as cargo test does. A default-filter of .config/nextest.toml could leave a test or a whole test
+    binary out, so the step ignores it. retries of the config could pass a test that failed, so the step retries
+    none. Each of these flags stays out when ARGS, those of the user, already give it, since nextest takes it once.
     """
-    if step == 'integration' and os.environ.get(NEXTEST, '').strip() == '1':
-        return [*COVERAGE[:2], 'nextest', *COVERAGE[3:], '--no-tests=pass']
-    return COVERAGE
+    if step != 'integration' or os.environ.get(NEXTEST, '').strip() != '1':
+        return COVERAGE
+    command = [*COVERAGE[:2], 'nextest', *COVERAGE[3:]]
+    args = list(args)
+    given = {arg.partition('=')[0] for arg in (args[:args.index('--')] if '--' in args else args)}
+    if '--no-tests' not in given:
+        command.append('--no-tests=pass')
+    if '--ignore-default-filter' not in given:
+        command.append('--ignore-default-filter')
+    if '--retries' not in given:
+        command += ['--retries', '0']
+    return command
 
 
 # A line of cargo nextest for a test at NEXTEST_STATUS_LEVEL=skip, as SKIP [ ] (───) app::api slow: the name.
@@ -622,7 +634,7 @@ def run_tests(step, args):
     names = set()
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
-        command = [*coverage_command(step), *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
+        command = [*coverage_command(step, args), *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
         if nextest:
             code, text = run_streamed(command, env)

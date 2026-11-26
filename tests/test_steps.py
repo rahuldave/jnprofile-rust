@@ -872,6 +872,21 @@ class NextestFilters(unittest.TestCase):
                               ('nope', False), ('/(/', True)):
             self.assertEqual(steps.filter_matches(matcher, names), want, matcher)
 
+    def test_the_step_ignores_the_default_filter_and_retries_none_unless_the_user_says(self):
+        with mock.patch.dict(os.environ, {steps.NEXTEST: '1'}):
+            command = steps.coverage_command('integration')
+            self.assertIn('--ignore-default-filter', command)
+            self.assertEqual(command[command.index('--retries') + 1], '0')
+            for args in (['--retries', '2'], ['--retries=2']):
+                self.assertNotIn('--retries', steps.coverage_command('integration', args), args)
+                self.assertIn('--ignore-default-filter', steps.coverage_command('integration', args), args)
+            self.assertNotIn('--ignore-default-filter',
+                             steps.coverage_command('integration', ['--ignore-default-filter']))
+            self.assertIn('--retries', steps.coverage_command('integration', ['--', '--retries']))
+            self.assertNotIn('--no-tests=pass', steps.coverage_command('integration', ['--no-tests=fail']))
+            self.assertIn('--no-tests=pass', command)
+            self.assertEqual(steps.coverage_command('test'), steps.COVERAGE)
+
     def test_the_names_of_the_lines_of_nextest(self):
         text = ('        SKIP [         ] (───) w::api slow\n        PASS [   0.010s] (1/2) w::api a::b\n'
                 '     Summary [   0.013s] 1 test run: 1 passed, 1 skipped\n')
@@ -994,6 +1009,28 @@ class NextestCargo(unittest.TestCase):
         done = self.integration(root, dict(env, NEXTEST_STATUS_LEVEL='fail'))
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
         self.assertNotIn('PASS [', done.stdout)
+
+    def test_a_default_filter_leaves_no_test_out(self):
+        root, env = self.project({'api.rs': '#[test]\nfn a() { assert_eq!(w::one(), 2); }\n'})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text("[profile.default]\ndefault-filter = 'none()'\n")
+        done = self.integration(root, env)
+        self.assertNotEqual(done.returncode, 0, 'the failing test ran')
+        self.assertIn('FAIL', done.stdout)
+
+    def test_retries_of_the_config_do_not_pass_a_test_that_failed(self):
+        flag = 'flaky-ran-once'
+        root, env = self.project({'api.rs': (
+            '#[test]\nfn flaky() {\n    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("'
+            + flag + '");\n    if !path.exists() {\n        std::fs::write(&path, "").unwrap();\n'
+            '        panic!("first try");\n    }\n}\n')})
+        (root / '.config').mkdir()
+        (root / '.config/nextest.toml').write_text('[profile.default]\nretries = 2\n')
+        done = self.integration(root, env)
+        self.assertNotEqual(done.returncode, 0, done.stdout[-2000:])
+        (root / flag).unlink()
+        done = self.integration(root, env, '--retries', '2')
+        self.assertEqual(done.returncode, 0, 'the retries of the user stay: ' + done.stdout[-2000:])
 
     def test_a_filter_expression_goes_before_the_double_dash(self):
         root, env = self.project({'api.rs': '#[test]\nfn a() {}\n#[test]\nfn b() { panic!("b ran"); }\n'})
