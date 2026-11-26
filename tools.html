@@ -215,6 +215,7 @@
 <h3 class="anchored" data-anchor-id="integration-with-nextest">integration with nextest</h3>
 <p><code>cargo test</code> runs the test binaries one after another. A project can run the <code>integration</code> step through cargo nextest instead. nextest runs the tests of every test binary at the same time, each test in a process of its own. Set <code>JNPROFILE_RUST_NEXTEST=1</code> in the shell, or in the <code>env</code> of the CI job, and install the runner with <code>cargo install cargo-nextest --locked</code>.</p>
 <p>The step then runs <code>cargo llvm-cov nextest</code> with the same targets and the same report. A run with no test passes, as with <code>cargo test</code>. The <code>test</code> step keeps <code>cargo test</code>.</p>
+<p>The step runs the tests that <code>cargo test</code> runs. A <code>default-filter</code> of <code>.config/nextest.toml</code> could leave a test or a whole test binary out, so the step passes <code>--ignore-default-filter</code>. The <code>retries</code> of the config could pass a test that failed once, so the step passes <code>--retries 0</code>. A user who gives one of these flags or <code>--no-tests</code> before <code>--</code> keeps it, as in <code>just integration --retries 2</code>.</p>
 <p>Four things change with nextest:</p>
 <ul>
 <li><strong>A test runs in its own process.</strong> Tests of one file that share a <code>static</code>, or a <code>OnceLock</code> set by the first test, each see a fresh one. A test that passes with <code>cargo test</code> and fails with nextest may depend on such state.</li>
