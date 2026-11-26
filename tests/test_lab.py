@@ -3,7 +3,7 @@
 The lab copies jnterfaces at commit BASE, from the clone in the folder that JNTERFACES names, else in
 SKILL_PACKAGES_DIR/jnterfaces, else in jnterfaces next to the main clone of this repository, also from a worktree.
 BASE has the rust entry of jnterfaces#34, the programs of jnterfaces#39, the order of #52, and the version floors of
-#57 and jlog v0.3.0 of #62. The fixed commit
+#57, and jlog v0.5.0 of jnterfaces v0.5.2. The fixed commit
 keeps the lab the same when the clone moves on. It installs this working tree as the package jnprofile-rust, as
 tests/test_install_stack.py of jnterfaces makes its profile packages. The roles tasker and prose come from small
 stand-in packages. The lab needs git, just, rustup, cargo, cargo-llvm-cov and uv, and each program of profile.json that
@@ -45,10 +45,11 @@ JNTERFACES = Path(os.environ.get('JNTERFACES')
                   or (Path(PACKAGES_DIR) / 'jnterfaces' if PACKAGES_DIR else main_clone(REPO).parent / 'jnterfaces'))
 TOOLS = ('git', 'just', 'rustup', 'cargo', 'cargo-llvm-cov', 'uv')
 MISSING = [tool for tool in TOOLS if not shutil.which(tool)]
-# The merge of jnterfaces#62. It installs the programs of a profile (#39), runs integration before coverage-check
-# (#52), runs integration once in just verify (#54), pins smalldocs 0.5.12 (#55), reads the version floors of
-# programs (#57), and installs jlog v0.3.0 from its release binary (#62).
-BASE = '99b12a5a9b25931f8c98897fd74e6fc061599163'
+# The merge of jnterfaces#88, the release v0.5.2. It installs the programs of a profile (#39), runs integration
+# before coverage-check (#52), runs integration once in just verify (#54), reads the version floors of programs
+# (#57), pins smalldocs 0.5.13 (#82), writes rust-toolchain.toml when a project has none (#84), and installs jlog
+# v0.5.0 from its release binary.
+BASE = '9e1f22dbaa423c4990493b883462663c14564858'
 READY = not MISSING and subprocess.run(['git', '-C', str(JNTERFACES), 'cat-file', '-e', f'{BASE}^{{commit}}'],
                                        capture_output=True).returncode == 0
 WHY = f'needs {", ".join(MISSING)}' if MISSING else f'needs a clone of jnterfaces with commit {BASE} in {JNTERFACES}'
