@@ -79,7 +79,9 @@ The build of the coverage run stays warm between checks. Cargo compiles again on
 - A build may have a folder of its own, from `build.build-dir`, `CARGO_LLVM_COV_TARGET_DIR` or `CARGO_LLVM_COV_BUILD_DIR`. Then the step cleans the whole workspace on each run.
 - The dependency builds stay in each case.
 
-The step saves the fingerprint in `target/llvm-cov-target` after a run passes. A failed run leaves no fingerprint, and the next run cleans the whole workspace. So does a run with extra arguments, such as `--config`.
+The step saves the fingerprint in `target/llvm-cov-target` after a run passes, with the commit of HEAD. A failed run leaves no fingerprint, and the next run cleans the whole workspace. So does a run with extra arguments, such as `--config`.
+
+The changed files are those against the saved commit, not against HEAD. A cache of CI or a copy of `target/` in a new worktree may bring a build of an older commit. Then each package that a commit since then changed is cleaned too. A clone that does not have the saved commit, such as a shallow clone of CI, cleans the whole workspace.
 
 On the first commit of a repository, `diff-cover` has no parent to compare with. Then the step checks each line of the merged report, and it names each line that no test runs.
 
@@ -139,12 +141,12 @@ A target that reaches a module only through a re-export, such as `app::Thing`, i
 
 The step then runs `cargo llvm-cov nextest` with the same targets and the same report. A run with no test passes, as with `cargo test`. The `test` step keeps `cargo test`.
 
-Three things change with nextest:
+Four things change with nextest:
 
 - **A test runs in its own process.** Tests of one file that share a `static`, or a `OnceLock` set by the first test, each see a fresh one. A test that passes with `cargo test` and fails with nextest may depend on such state.
 - **Filters are those of nextest.** A filter expression goes before `--`, as in `just integration -E 'test(api)'`. After `--`, a plain test name still filters.
 - **A test target with `harness = false` must answer `--list`,** as one built on libtest-mimic does. nextest first asks each test binary for its tests, and a plain `main` that does not answer stops the step.
-- **Tests that cannot share the machine need a name in `.config/nextest.toml`.** A test with a short timeout, or one that starts a program, may fail under the load of the others. nextest runs the tests of a test group one at a time. Each name in the filter must be one of the project, since nextest fails on a `binary(...)` that matches no binary:
+- **Tests that cannot share the machine need a name in `.config/nextest.toml`.** A test with a short timeout, or one that starts a program, may fail under the load of the others. nextest runs the tests of a test group one at a time. Each name in the filter must be one of the project. nextest fails on a `binary(...)` that matches no binary. A `test(...)` that matches no test passes in nextest, so the step fails on it, once the tests pass. The check reads each `filter` and `default-filter` of the file. The run sees only the tests of its targets, so a plain name also counts when a Rust file of the project holds it, as a unit test does. A regex or a glob counts only against the tests of the run. The check runs with no extra arguments, and not when `NEXTEST_STATUS_LEVEL` is set below `skip`:
 
 ```toml
 [test-groups]

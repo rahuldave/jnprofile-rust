@@ -13,6 +13,7 @@ HEAD:./PATH, so a commit cannot exempt its own code. With no parent, or a parent
 git matches their patterns, as pathspecs with the magic word glob. Every path is relative to the current folder, the top
 of the project, which can be a subfolder of the git repository.
 """
+import fnmatch
 import glob
 import hashlib
 import importlib.util
@@ -490,6 +491,91 @@ def coverage_command(step):
     return COVERAGE
 
 
+# A line of cargo nextest for a test at NEXTEST_STATUS_LEVEL=skip, as SKIP [ ] (───) app::api slow: the name.
+NEXTEST_LINE = re.compile(r'^\s+(?:PASS|SKIP|FLAKY|SLOW|LEAK|TRY \d+ PASS)\s+\[[^\]]*\]\s+(?:\(\S+\)\s+)?\S+ (.+?)\s*$',
+                          re.M)
+
+
+def filter_matches(matcher, names):
+    """True when the matcher of test(MATCHER) of nextest takes one of NAMES: =exact, ~contains, /regex/, #glob, or
+    contains with no prefix."""
+    if matcher.startswith('='):
+        return matcher[1:] in names
+    if matcher.startswith('/') and matcher.endswith('/') and len(matcher) > 1:
+        try:
+            pattern = re.compile(matcher[1:-1])
+        except re.error:
+            return True
+        return any(pattern.search(name) for name in names)
+    if matcher.startswith('#'):
+        return any(fnmatch.fnmatchcase(name, matcher[1:]) for name in names)
+    return any(matcher.removeprefix('~') in name for name in names)
+
+
+def unmatched_filters(names):
+    """Each test(...) of a filter in .config/nextest.toml that matches none of NAMES, the tests that nextest saw.
+
+    nextest fails on a binary(...) that matches no binary, but takes a test(...) that matches no test with no word,
+    so a test that a test group should hold runs with the others. A config that does not parse is left to nextest.
+    """
+    try:
+        import tomllib
+        config = tomllib.loads((top() / '.config/nextest.toml').read_text())
+    except (ImportError, OSError, ValueError):
+        return []
+    filters = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in ('filter', 'default-filter') and isinstance(item, str):
+                    filters.append(item)
+                else:
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+    walk(config)
+    found = []
+    source = None
+    for text in filters:
+        for matcher in test_matchers(text):
+            if not matcher or filter_matches(matcher, names) or f'test({matcher})' in found:
+                continue
+            # The run sees the tests of its targets only, so a name may be that of a unit test. A plain name counts
+            # when some Rust file of the project holds its last segment; a regex or a glob is not checked further.
+            if matcher[0] in '/#':
+                continue
+            if source is None:
+                source = '\n'.join(Path(path).read_text(errors='replace') for path in
+                                    git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+                                        '*.rs').stdout.split('\0') if path and Path(path).is_file())
+            segment = matcher.lstrip('=~').rpartition('::')[2]
+            # =name is exact, so its last segment must be a whole function name; a plain name is a substring.
+            held = (re.search(rf'\bfn\s+{re.escape(segment)}\b', source) if matcher.startswith('=')
+                    else segment in source)
+            if not held:
+                found.append(f'test({matcher})')
+    return found
+
+
+def test_matchers(text):
+    """The matcher of each test(...) of the filter expression TEXT, with a regex /.../ read to its closing slash."""
+    found = []
+    for start in re.finditer(r'(?<![\w-])test\(\s*', text):
+        at = start.end()
+        if text.startswith('/', at):
+            close = at + 1
+            while close < len(text) and text[close] != '/':
+                close += 2 if text[close] == '\\' else 1
+            end = text.find(')', close)
+        else:
+            end = text.find(')', at)
+        if end != -1:
+            found.append(text[at:end].strip())
+    return found
+
+
 def run_tests(step, args):
     """Run the tests of STEP with coverage into target/llvm-cov/STEP.lcov, with ARGS for cargo llvm-cov test.
 
@@ -527,15 +613,33 @@ def run_tests(step, args):
     env = dict(os.environ, RUSTC_WRAPPER=str(launcher), JNPROFILE_SOURCE_ROOT=str(top()),
                JNPROFILE_COMPILER_EVIDENCE=str(evidence),
                JNPROFILE_PRIOR_RUSTC_WRAPPER=os.environ.get('RUSTC_WRAPPER', ''))
+    nextest = coverage_command(step) != COVERAGE
+    # A line for each test, ignored or not, so the names of the filters can be checked. A level of the user's own
+    # stays, and with one below skip the check is off.
+    level = os.environ.get('NEXTEST_STATUS_LEVEL', '').strip()
+    env.setdefault('NEXTEST_STATUS_LEVEL', 'skip')
+    check_names = nextest and not args and level in ('', 'skip', 'all')
+    names = set()
     for number, selection in enumerate(runs):
         parts.append(REPORTS / f'{step}.part{number}.lcov')
         command = [*coverage_command(step), *selection, '--lcov', '--output-path', parts[-1].as_posix(), *args]
         print(shlex.join(command), flush=True)
-        code = subprocess.run(command, env=env).returncode
+        if nextest:
+            code, text = run_streamed(command, env)
+            names |= set(NEXTEST_LINE.findall(text))
+        else:
+            code = subprocess.run(command, env=env).returncode
         if code:
             pending_run(step).unlink(missing_ok=True)
             return code
     out.write_text(merge_lcov([part.read_text() for part in parts]))
+    unmatched = unmatched_filters(names) if check_names else []
+    for atom in unmatched:
+        print(f'{step}: the filter {atom} in .config/nextest.toml matches no test, so nextest gives it nothing',
+              file=sys.stderr, flush=True)
+    if unmatched:
+        pending_run(step).unlink(missing_ok=True)
+        return FAILED
     # Extra arguments, such as --config, can change the build, so only a run without them saves the fingerprint.
     if not args:
         save()
@@ -591,7 +695,7 @@ def dep_info(path):
     return {os.path.realpath(name.replace('\0', ' ')) for name in deps.split() if name}
 
 
-def changed_packages(meta, folder):
+def changed_packages(meta, folder, base='HEAD'):
     """The names of the workspace packages to clean, or None when only a clean of the whole workspace is sure.
 
     The packages are each one that holds a changed Rust file, and each that depends on one, directly or not, by any
@@ -616,7 +720,9 @@ def changed_packages(meta, folder):
     for node in (full.get('resolve') or {}).get('nodes', []):
         for dependency in node.get('deps', []):
             users.setdefault(dependency['pkg'], set()).add(node['id'])
-    changed = [os.path.realpath(path) for path in changed_code()]
+    # Against HEAD and against BASE, the commit of the saved build: a git reset --soft keeps the files of BASE on
+    # disk, so cargo compiles nothing, but the step coverage-check counts the changes against HEAD.
+    changed = sorted({os.path.realpath(path) for path in changed_code('HEAD') + changed_code(base)})
     found = set()
     for path in changed:
         here = Path(path).parent
@@ -635,7 +741,8 @@ def changed_packages(meta, folder):
               for target in package.get('targets', [])}
     # A changed file that is not Rust, such as one that include! reads, is in no package of its own, so any crate
     # that lists it needs a full clean.
-    tracked = git('diff', '-z', '--name-only', '--relative', '--diff-filter=d', 'HEAD').stdout.split('\0')
+    tracked = [path for commit in dict.fromkeys(('HEAD', base)) for path in
+               git('diff', '-z', '--name-only', '--relative', '--diff-filter=d', commit).stdout.split('\0')]
     untracked = git('ls-files', '-z', '--others', '--exclude-standard').stdout.split('\0')
     others = {os.path.realpath(path) for path in tracked + untracked if path and not path.endswith('.rs')}
     for info in folder.glob('**/deps/*.d'):
@@ -670,20 +777,31 @@ def clean_coverage_build():
     # than the build of coverage. So each run cleans the whole workspace, as before.
     moved = (meta.get('build_directory', meta.get('target_directory')) != meta.get('target_directory')
              or os.environ.get('CARGO_LLVM_COV_TARGET_DIR') or os.environ.get('CARGO_LLVM_COV_BUILD_DIR'))
+    # The stamp holds the fingerprint and the commit of HEAD of the last saved run. That run built the tree of
+    # that commit and its changes, so the changes to clean are those against that commit. A cache of CI or a copy
+    # of target/ in a new worktree can bring a stamp of another commit.
+    head = git('rev-parse', '--verify', '--quiet', 'HEAD^{commit}').stdout.strip()
     try:
-        warm = not moved and has_parent() and stamp.read_text() == fingerprint
+        saved, _, built = stamp.read_text().rpartition('\ncommit ')
+        built = built.strip()
+        warm = not moved and bool(head) and saved == fingerprint
     except OSError:
-        warm = False
+        warm, built = False, ''
+    known = bool(built) and git('cat-file', '-e', f'{built}^{{commit}}').returncode == 0
 
     def save():
         if not moved:
             folder.mkdir(parents=True, exist_ok=True)
-            stamp.write_text(fingerprint)
-    if not warm:
+            stamp.write_text(f'{fingerprint}\ncommit {head}\n')
+    if not warm or not known:
         stamp.unlink(missing_ok=True)
-        print('coverage: a full clean of the workspace, for the first run or a new build fingerprint', flush=True)
+        why = ('the first run or a new build fingerprint' if not warm else
+               'a build of a commit that this clone does not have')
+        print(f'coverage: a full clean of the workspace, for {why}', flush=True)
         return subprocess.run(['cargo', 'llvm-cov', 'clean', '--workspace', '--locked']).returncode, save
-    packages = changed_packages(meta, folder)
+    if built != head:
+        print(f'coverage: the build is of commit {built[:12]}, so the changes count against it', flush=True)
+    packages = changed_packages(meta, folder, built)
     if packages is None:
         stamp.unlink(missing_ok=True)
         print('coverage: a full clean of the workspace, since no smaller clean is sure', flush=True)
@@ -699,9 +817,9 @@ def clean_coverage_build():
     return code, save
 
 
-def changed_code():
-    """The changed Rust files against HEAD, staged, unstaged or untracked, without the deleted ones."""
-    tracked = git('diff', '-z', '--name-only', '--relative', '--diff-filter=d', 'HEAD', '--', '*.rs')
+def changed_code(base='HEAD'):
+    """The changed Rust files against the commit BASE, staged, unstaged or untracked, without the deleted ones."""
+    tracked = git('diff', '-z', '--name-only', '--relative', '--diff-filter=d', base, '--', '*.rs')
     untracked = git('ls-files', '-z', '--others', '--exclude-standard', '--', '*.rs')
     return sorted(set(filter(None, (tracked.stdout + '\0' + untracked.stdout).split('\0'))))
 
@@ -1434,14 +1552,14 @@ def outcome(code, out):
     return RUNNER
 
 
-def run_streamed(command):
+def run_streamed(command, base=None):
     """Run COMMAND with its stderr in its stdout, copy each line out as it comes, and return the code and the text.
 
     The output of cargo is plain, with no colors, no quiet and no verbose lines, so the patterns match it. Once
     COMMAND ends, the copy goes on while lines still come, so a slow reader of stdout loses none. A process that
     COMMAND left running and that holds the pipe open, but prints nothing, does not keep this one waiting.
     """
-    env = dict(os.environ, CARGO_TERM_COLOR='never', CARGO_TERM_QUIET='false', CARGO_TERM_VERBOSE='false')
+    env = dict(base or os.environ, CARGO_TERM_COLOR='never', CARGO_TERM_QUIET='false', CARGO_TERM_VERBOSE='false')
     lines = []
 
     def copy(pipe):
