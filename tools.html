@@ -138,6 +138,13 @@
 </div>
 <p><code>cargo llvm-cov</code> writes the coverage as an LCOV file, a text format that lists how often each line ran. <code>diff-cover</code> is a Python program that compares such a file with the diff of git.</p>
 <p><code>coverage-check</code> runs <code>diff-cover</code> against <code>HEAD</code>, with a limit of 100%. The diff holds the staged, the unstaged and the untracked changes.</p>
+<p>In CI, a checkout has no such change, so against <code>HEAD</code> the step would check no line. When <code>CI</code> is set, the step counts the changes against a base commit. With the prose role, the base is that of <code>api-prose-check</code>, from <code>base_commit</code> of its <code>prose_gate.py</code>, so both steps check the same changes. That base covers each commit of a push to the default branch, and each commit of a branch. With no prose role, these rules hold:</p>
+<ul>
+<li><strong>On a pull request,</strong> the base is the merge base of <code>HEAD</code> and <code>origin/GITHUB_BASE_REF</code>, the branch that the pull request targets. So only the lines of the pull request count.</li>
+<li><strong>On another event, such as a push,</strong> the base is the first parent of <code>HEAD</code>. For a merge commit, the lines of the merged branch count once more. With no parent, <code>HEAD</code> is a first commit, and each line must run.</li>
+<li><strong>On <code>pull_request_target</code>,</strong> the checkout is the base branch, so the step fails with exit code 2.</li>
+</ul>
+<p>A shallow clone, or one that lacks the base, fails the step with exit code 2, so check out the history, as with <code>fetch-depth: 0</code> of <code>actions/checkout</code>. In CI, the step reads <code>coverage-exclude.txt</code> and <code>generated.txt</code> from the base, so a change cannot exempt its own code.</p>
 <p>An untracked path that is not a file, such as a link to a folder, does not count. The jnterfaces installer makes such a link, <code>.claude/skills/rust-profile</code>. <code>diff-cover</code> cannot read it, so the step leaves it out.</p>
 <p>Such a path whose name holds a <code>\</code> stops the step. <code>diff-cover</code> reads each <code>\</code> as a <code>/</code>, so to leave out that path it would leave out other files too. Rename it, remove it or add it to <code>.gitignore</code>.</p>
 <p>The step merges the report of <code>test</code> and that of <code>integration</code> into one report, and gives it to <code>diff-cover</code>. A line that one of them runs passes. A line that one report measures and no report runs fails, also when the other report does not measure it, as for code under <code>#[cfg(not(test))]</code>. It reads each report only for the same run ID and the same worktree tree.</p>
@@ -154,6 +161,7 @@
 </ul>
 </li>
 <li>A build may have a folder of its own, from <code>build.build-dir</code>, <code>CARGO_LLVM_COV_TARGET_DIR</code> or <code>CARGO_LLVM_COV_BUILD_DIR</code>. Then the step cleans the whole workspace on each run.</li>
+<li>A full clean also removes the builds of each workspace package in both layouts of cargo, <code>deps</code> and <code>build/PACKAGE/HASH</code>. cargo 1.95 puts a test binary in <code>deps</code>, and a newer cargo puts it in <code>build</code>. <code>cargo llvm-cov clean</code> cleans only its own layout, so after a change of the toolchain the old test binaries would stay. <code>llvm-cov</code> would read them too, and their lines, of an older build, would count as lines that no test runs, also lines that are now comments.</li>
 <li>The dependency builds stay in each case.</li>
 </ul>
 <p>The step saves the fingerprint in <code>target/llvm-cov-target</code> after a run passes, with the commit of HEAD. A failed run leaves no fingerprint, and the next run cleans the whole workspace. So does a run with extra arguments, such as <code>--config</code>.</p>
