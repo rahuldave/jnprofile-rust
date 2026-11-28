@@ -875,8 +875,13 @@ def unreadable_untracked():
     the one that the jnterfaces installer makes in .claude/skills, a broken link or a nested repository stops
     it with an error. The names are read as bytes and decoded as the file system does, so a name that is not
     UTF-8 or that holds a carriage return stays as it is.
+
+    diff-cover runs from the top of the repository and lists the untracked paths of all of it, so the list does
+    too: with :/, from a project in a subfolder, it holds the paths outside the project, relative to the current
+    folder, as ../.claude/skills/x.
     """
-    listed = subprocess.run(['git', 'ls-files', '-z', '--others', '--exclude-standard'], capture_output=True)
+    listed = subprocess.run(['git', 'ls-files', '-z', '--others', '--exclude-standard', '--', ':/'],
+                            capture_output=True)
     paths = (os.fsdecode(name) for name in listed.stdout.split(b'\0') if name)
     return sorted(path for path in paths if not os.path.isfile(path))
 
@@ -896,13 +901,18 @@ def reported(text, root):
 
 
 def test_file(path):
-    """True for a file in the folder tests or benches of a Cargo package, which holds tests and no code to cover."""
+    """True for a file in the folder tests, benches or examples of a Cargo package: no code that coverage-check counts.
+
+    cargo llvm-cov leaves these folders out of its report, also when a test target compiles them, so a changed file
+    there could never pass. The tests and benches are tests. An example is a program that shows the API, with a main
+    that no test runs: typecheck and lint build it, and the code that it calls is in src, which counts.
+    """
     try:
         _, folder = package_of(path)
     except SystemExit:
         return False
     parts = Path(os.path.realpath(path)).relative_to(folder).parts
-    return len(parts) > 1 and parts[0] in ('tests', 'benches')
+    return len(parts) > 1 and parts[0] in ('tests', 'benches', 'examples')
 
 
 def declaration_category(path):
@@ -1073,9 +1083,12 @@ def coverage():
     WORK.mkdir(parents=True, exist_ok=True)
     kept = WORK / 'lcov.info'
     kept.write_text(filter_lcov(merge_lcov(texts), root, excluded))
-    code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept),
+    # diff-cover takes the paths of git diff, which are those of the top of the repository. From a project in a
+    # subfolder, it found no report line for them and passed with no line checked. So it runs from the top.
+    repository = git('rev-parse', '--show-toplevel').stdout.strip() or None
+    code = subprocess.run([*UV_RUN, '--with', DIFF_COVER, 'diff-cover', str(kept.resolve()),
                            '--compare-branch', base, '--include-untracked', '--fail-under', '100',
-                           *(['--exclude', *exclude_patterns(skipped)] if skipped else [])]).returncode
+                           *(['--exclude', *exclude_patterns(skipped)] if skipped else [])], cwd=repository).returncode
     lines = set().union(*(reported(text, root) for text in texts))
     missing = unreported(changed_code(base), lines, excluded)
     for path in missing:

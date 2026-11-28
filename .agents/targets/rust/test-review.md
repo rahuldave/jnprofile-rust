@@ -21,8 +21,8 @@ These rules add to the base task for the Rust tests of the change.
   report new logic in it that a test can reach.
 - **Code that the coverage cannot see.** cargo llvm-cov sets `cfg(coverage)`, so code under
   `#[cfg(not(coverage))]` does not count, as with a pragma. A `#[path]` attribute that puts library code in a
-  folder `tests` or `benches` hides it from the report, and `coverage-check` does not count those folders. Report
-  each new case.
+  folder `tests`, `benches` or `examples` hides it from the report, and `coverage-check` does not count those
+  folders. Report each new case, and new logic in an example that belongs in `src`, where a test can reach it.
 - **Macros.** LLVM counts the code of a `macro_rules!` macro at the line that calls it. So `coverage-check` cannot
   see a branch of a macro that no test runs. Check each branch of a new or changed macro by hand.
 - **Features and platforms.** The steps run with `--all-features`, on the platform of the machine. Code for

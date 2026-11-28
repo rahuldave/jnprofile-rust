@@ -1485,7 +1485,7 @@ class Repository(unittest.TestCase):
         self.assertEqual(changed, ['benches/b.rs', 'examples/demo.rs', 'src/lib.rs', 'src/orphan.rs', 'src/skip.rs',
                                    'src/tests/mod.rs', 'tests/api.rs'])
         self.assertEqual(steps.unreported(changed, {'src/lib.rs'}, lambda path: path == 'src/skip.rs'),
-                         ['examples/demo.rs', 'src/orphan.rs', 'src/tests/mod.rs'])
+                         ['src/orphan.rs', 'src/tests/mod.rs'])
 
     def test_missing_declarations_are_classified_without_waiving_runtime_files(self):
         sources = {
@@ -1745,13 +1745,14 @@ class Repository(unittest.TestCase):
         with self.diff_cover() as calls, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(steps.coverage(), 0)
         diff_cover, = calls
-        self.assertEqual(diff_cover[diff_cover.index('diff-cover') + 1], str(steps.WORK / 'lcov.info'))
+        self.assertEqual(diff_cover[diff_cover.index('diff-cover') + 1], str((steps.WORK / 'lcov.info').resolve()))
         self.assertNotIn('integration', ' '.join(diff_cover))
 
-    def gate(self):
-        """Run coverage with the real diff-cover, as the script, and return its exit code and its output."""
+    def gate(self, folder=''):
+        """Run coverage with the real diff-cover, as the script, in FOLDER of the repository, and return its exit code
+        and its output."""
         done = subprocess.run([sys.executable, str(REPO / '.agents/just/rust/steps.py'), 'coverage'],
-                              cwd=self.root, capture_output=True, text=True)
+                              cwd=self.root / folder, capture_output=True, text=True)
         return done.returncode, done.stdout + done.stderr
 
     def test_a_line_that_one_report_misses_and_the_other_does_not_measure_still_fails(self):
@@ -1769,6 +1770,59 @@ class Repository(unittest.TestCase):
         self.write_reports([('src/lib.rs', 1, 1), ('src/lib.rs', 2, 0)], [('src/lib.rs', 2, 1), ('src/lib.rs', 3, 1)])
         code, out = self.gate()
         self.assertEqual(code, 0, out)
+
+    def test_in_a_subfolder_of_the_repository_the_changed_lines_still_count(self):
+        """diff-cover once ran in the project folder, found no report line for the paths of git, and passed."""
+        (self.root / '.gitignore').write_text('target/\n')
+        self.files('app/src/lib.rs')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'one')
+        (self.root / 'app/src/lib.rs').write_text('a\nb\n')
+        os.chdir(self.root / 'app')
+        self.write_reports([('app/src/lib.rs', 1, 1), ('app/src/lib.rs', 2, 0)], [])
+        code, out = self.gate('app')
+        self.assertEqual(code, 1, out)
+        self.assertIn('app/src/lib.rs (50.0%): Missing lines 2', out)
+        self.write_reports([('app/src/lib.rs', 1, 1), ('app/src/lib.rs', 2, 1)], [])
+        code, out = self.gate('app')
+        self.assertEqual(code, 0, out)
+        self.assertIn('Coverage: 100%', out)
+
+    def test_in_a_subfolder_an_untracked_link_outside_the_project_does_not_stop_diff_cover(self):
+        """diff-cover lists the untracked paths of the whole repository, so the links outside the project count."""
+        (self.root / '.gitignore').write_text('target/\n')
+        self.files('app/src/lib.rs')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'one')
+        (self.root / '.claude/skills').mkdir(parents=True)
+        (self.root / '.claude/skills/link').symlink_to('../../app/src')
+        (self.root / 'app/src/lib.rs').write_text('a\nb\n')
+        os.chdir(self.root / 'app')
+        self.assertEqual(steps.unreadable_untracked(), ['../.claude/skills/link'])
+        self.write_reports([('app/src/lib.rs', 1, 1), ('app/src/lib.rs', 2, 0)], [])
+        code, out = self.gate('app')
+        self.assertEqual(code, 1, out)
+        self.assertNotIn('Error', out)
+        self.assertIn('app/src/lib.rs (50.0%): Missing lines 2', out)
+
+    def test_a_changed_example_is_not_code_to_cover_and_a_module_of_src_is(self):
+        """cargo llvm-cov leaves examples out of its report, so a changed example could never pass."""
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+        self.commit_one()
+        self.files('examples/demo.rs', 'examples/demo/part.rs', 'src/only_for_examples.rs')
+        (self.root / 'examples/demo.rs').write_text('fn main() {}\n')
+        (self.root / 'src/only_for_examples.rs').write_text('pub fn f() {}\n')
+        self.assertTrue(steps.test_file('examples/demo.rs'))
+        self.assertTrue(steps.test_file('examples/demo/part.rs'))
+        self.assertFalse(steps.test_file('src/examples.rs'))
+        self.assertFalse(steps.test_file('examples'))
+        self.write_reports([('src/lib.rs', 1, 1)], [])
+        out = io.StringIO()
+        with self.diff_cover(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(steps.coverage(), 1)
+        self.assertNotIn('examples/', out.getvalue())
+        self.assertIn('src/only_for_examples.rs: a changed file that is absent from the coverage report',
+                      out.getvalue())
 
     def untracked_links(self):
         """Add the untracked paths that diff-cover cannot open: links to folders, a broken link, a nested repo."""
