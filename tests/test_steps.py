@@ -331,6 +331,142 @@ class ExampleCoverage(unittest.TestCase):
                 self.assertNotIn('/other/', text)
 
 
+    def test_workspace_library_below_tests_is_measured_and_uncovered_source_still_fails(self):
+        cargo = (self.root / 'Cargo.toml').read_text()
+        self.write('Cargo.toml', cargo + '[workspace]\nmembers=["tests/fixtures/owned"]\n')
+        self.write('tests/fixtures/owned/Cargo.toml',
+                   '[package]\nname="owned"\nversion="0.1.0"\nedition="2021"\n')
+        self.write('tests/fixtures/owned/src/lib.rs',
+                   'pub fn value() -> u32 {\n    7\n}\n'
+                   '#[test] fn returns_seven() { assert_eq!(value(), 7); }\n')
+        self.command(['cargo', 'generate-lockfile', '--offline'])
+        self.runner('run', 'test')
+        self.runner('run', 'integration')
+        report = self.root / 'target/llvm-cov/test.lcov'
+        self.assertIn('tests/fixtures/owned/src/lib.rs', steps.reported(report.read_text(), self.root))
+        raw = (self.root / 'target/llvm-cov/test.part0.examples.lcov').read_text()
+        self.assertIn(f'SF:{self.root}/tests/fixtures/owned/src/lib.rs\n', raw)
+        self.assertNotIn('tests/fixtures/owned/src/lib.rs',
+                         (self.root / 'target/llvm-cov/test.part0.primary.lcov').read_text())
+        self.runner('coverage')
+        self.write('tests/fixtures/owned/src/lib.rs',
+                   'pub fn value() -> u32 {\n'
+                   '    if std::env::var_os("OWNED_LIBRARY_UNRUN").is_some() {\n'
+                   '        return 9;\n    }\n    7\n}\n'
+                   '#[test] fn returns_seven() { assert_eq!(value(), 7); }\n')
+        self.env.pop('OWNED_LIBRARY_UNRUN', None)
+        self.runner('run', 'test')
+        self.runner('run', 'integration')
+        self.assertIn('DA:3,0\n', report.read_text())
+        self.runner('coverage', expected=1)
+        self.write('tests/fixtures/owned/src/orphan.rs', 'pub fn orphan() -> u32 { 99 }\n')
+        self.runner('run', 'test')
+        self.runner('run', 'integration')
+        done = self.runner('coverage', expected=1)
+        self.assertIn('tests/fixtures/owned/src/orphan.rs: a changed file', done.stdout)
+
+
+class OwnedLibrarySources(unittest.TestCase):
+    """Pure mocked ownership controls; no subprocess or compiler is launched."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        old = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, old)
+        env = mock.patch.dict(os.environ, CARGO_HOME=str(self.root / 'cargo-home'),
+                              RUSTUP_HOME=str(self.root / 'rustup-home'),
+                              CARGO_LLVM_COV_TARGET_DIR=str(self.root / 'artifacts'))
+        env.start()
+        self.addCleanup(env.stop)
+        self.folder = self.root / 'tests/fixtures/assets'
+        self.files = ['tests/fixtures/assets/src/lib.rs', 'tests/fixtures/assets/src/deep/item.rs',
+                      'tests/fixtures/assets/src/tests/helper.rs', 'tests/fixtures/assets/tests/check.rs',
+                      'tests/fixtures/assets/src/value_tests.rs', 'tests/fixtures/assets/outside.rs',
+                      'tests/fixtures/assets/src/dep/src/lib.rs']
+        for name in self.files:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('pub fn value() -> u32 { 7 }\n')
+        package = {'id': 'assets', 'name': 'assets', 'manifest_path': str(self.folder / 'Cargo.toml'),
+                   'targets': [{'kind': ['lib'], 'src_path': str(self.folder / 'src/lib.rs')}]}
+        dep = {'id': 'dep', 'name': 'dep', 'manifest_path': str(self.folder / 'src/dep/Cargo.toml'),
+               'targets': [{'kind': ['lib'], 'src_path': str(self.folder / 'src/dep/src/lib.rs')}]}
+        self.data = {'workspace_members': ['assets'], 'workspace_root': str(self.root),
+                     'target_directory': str(self.root / 'target'), 'packages': [package, dep]}
+        self.run = mock.patch.object(steps.subprocess, 'run', side_effect=self.command)
+        self.run.start()
+        self.addCleanup(self.run.stop)
+        self.git_mock = mock.patch.object(steps, 'git', side_effect=self.git)
+        self.git_mock.start()
+        self.addCleanup(self.git_mock.stop)
+
+    def command(self, args, **kwargs):
+        """Only metadata and pkgid are accepted; unexpected execution fails the test."""
+        if args[:2] == ['cargo', 'metadata']:
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.data), '')
+        if args[:2] == ['cargo', 'pkgid']:
+            return subprocess.CompletedProcess(args, 0, args[-1] + '\n', '')
+        raise AssertionError(f'unexpected subprocess: {args}')
+
+    def git(self, *args):
+        """Return an explicit source inventory and nonignored status without running Git."""
+        if args[0] == 'ls-files':
+            return subprocess.CompletedProcess(args, 0, '\0'.join(self.files) + '\0', '')
+        if args[0] == 'check-ignore':
+            return subprocess.CompletedProcess(args, 1, '', '')
+        raise AssertionError(f'unexpected Git: {args}')
+
+    def test_selected_library_restores_only_owned_source_root_below_tests_ancestor(self):
+        sources = steps.example_sources(['--workspace'])
+        for name in self.files[:2]:
+            self.assertIn(name, sources)
+            self.assertIn(str(self.root / name), sources)
+        for name in self.files[2:]:
+            self.assertNotIn(name, sources)
+
+    def test_excluded_or_unselected_library_cannot_supply_sources(self):
+        for args in (['--workspace', '--exclude', 'assets'], ['--package', 'dep'],
+                     ['--workspace', '--exclude-from-report', 'assets']):
+            self.assertEqual(steps.example_sources(args), set(), args)
+
+    def test_library_without_tests_ancestor_does_not_expand_supplement(self):
+        self.data['packages'][0]['manifest_path'] = str(self.root / 'Cargo.toml')
+        self.data['packages'][0]['targets'][0]['src_path'] = str(self.root / 'src/lib.rs')
+        self.assertEqual(steps.example_sources(['--workspace']), set())
+
+    def test_supplement_keeps_only_real_owned_records_and_retains_zero_counts(self):
+        out = self.root / 'primary.lcov'
+        out.write_text('SF:src/lib.rs\nDA:1,1\nend_of_record\n')
+        raw_text = ''.join(f'SF:{self.root / name}\nDA:1,0\nend_of_record\n' for name in self.files)
+
+        def export(args, **kwargs):
+            """Stand in for the report export; never execute a command."""
+            if args[:3] == ['cargo', 'llvm-cov', 'report']:
+                self.assertIn('--release', args)
+                self.assertIn('--target', args)
+                Path(args[args.index('--output-path') + 1]).write_text(raw_text)
+                return subprocess.CompletedProcess(args, 0)
+            return self.command(args, **kwargs)
+
+        with mock.patch.object(steps.subprocess, 'run', side_effect=export), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(steps.example_lcov([*steps.COVERAGE, '--workspace', '--release',
+                                                '--target', 'example-target'], out,
+                                               ['--release', '--target', 'example-target']), 0)
+        merged = out.read_text()
+        for name in self.files[:2]:
+            self.assertIn(f'SF:{self.root / name}\nDA:1,0\n', merged)
+        for name in self.files[2:]:
+            self.assertNotIn(name, merged)
+        self.assertIn('SF:src/lib.rs\nDA:1,1\n', merged)
+        self.assertEqual(out.with_suffix('.examples.lcov').read_text(), raw_text)
+        self.assertEqual(out.with_suffix('.primary.lcov').read_text(),
+                         'SF:src/lib.rs\nDA:1,1\nend_of_record\n')
+
+
 class Targets(unittest.TestCase):
     """target_flags and run_tests, with a stand-in cargo that prints the metadata and logs its arguments."""
 

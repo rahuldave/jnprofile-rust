@@ -478,12 +478,12 @@ def example_options(args):
 
 
 def example_sources(args):
-    """Git-owned example sources, bounded by Cargo package ownership rather than an unrestricted raw export.
+    """Git-owned sources hidden by upstream defaults, bounded by selected workspace package ownership.
 
-    Keep the ordinary report and its upstream defaults. The supplement restores only nonignored workspace
-    example source files (including modules); dependency packages and Cargo output directories cannot own them.
-    Custom example entrypoints count too; other custom-path modules use the ordinary report. A source in tests,
-    benches or a test-named file stays outside this supplement, as it does in the upstream default report.
+    Restore examples and library source roots below a workspace-relative tests ancestor. A library's own tests,
+    benches and test-named files stay out. Dependency packages, ignored paths and Cargo output roots cannot own
+    supplemental sources. Custom example entrypoints count too. Only actual raw mappings supply line counts;
+    source discovery never creates coverage for an uncompiled file.
     """
     values, _, context, llvm_context = example_options(args)
     before = args[:args.index('--')] if '--' in args else args
@@ -520,8 +520,15 @@ def example_sources(args):
             current = Path(values['--manifest-path'][-1] if manifest else 'Cargo.toml').resolve()
             own = {key for key in members if Path(packages[key]['manifest_path']).resolve() == current}
             selected = own or members
-    selected = selected - ids(values['--exclude'] + values['--exclude-from-report'])
-    selected = {key for key in selected if any('example' in target['kind'] for target in packages[key]['targets'])}
+    selected = (selected & members) - ids(values['--exclude'] + values['--exclude-from-report'])
+    example_packages = {key for key in selected
+                        if any('example' in target['kind'] for target in packages[key]['targets'])}
+    library_roots = {key: [Path(target['src_path']).resolve().parent for target in packages[key]['targets']
+                          if set(target['kind']) & LIBRARY
+                          and Path(target['src_path']).resolve().is_relative_to(root)
+                          and 'tests' in Path(target['src_path']).resolve().relative_to(root).parts[:-1]]
+                     for key in selected}
+    selected = example_packages | {key for key, folders in library_roots.items() if folders}
     if not selected:
         return set()
     directories = {key: Path(package['manifest_path']).resolve().parent for key, package in packages.items()}
@@ -592,7 +599,9 @@ def example_sources(args):
             continue
         owner = max(owners, key=lambda key: len(directories[key].parts))
         local = path.relative_to(directories[owner])
-        if owner not in selected or ('examples' not in local.parts[:-1] and path not in entrypoints):
+        example = owner in example_packages and ('examples' in local.parts[:-1] or path in entrypoints)
+        library = any(path.is_relative_to(folder) for folder in library_roots.get(owner, ()))
+        if owner not in selected or not (example or library):
             continue
         if {'tests', 'benches'} & set(local.parts[:-1]) or re.fullmatch(r'(?:tests|[\w-]+[_-]tests)\.rs', path.name):
             continue
@@ -606,7 +615,7 @@ def example_sources(args):
 
 
 def example_lcov(command, out, args):
-    """A supported same-profile report export restricted to established example sources, without another test run."""
+    """A same-profile export restricted to established owned sources, without another test run."""
     before = args[:args.index('--')] if '--' in args else args
     flags = {arg.split('=', 1)[0] for arg in before}
     if flags & {'--dep-coverage', '--no-default-ignore-filename-regex', '--disable-default-ignore-filename-regex'}:
@@ -614,6 +623,8 @@ def example_lcov(command, out, args):
     sources = example_sources(command[3:])
     if not sources:
         return 0
+    primary = out.read_text()
+    out.with_suffix('.primary.lcov').write_text(primary)
     raw = out.with_suffix('.examples.lcov')
     raw.unlink(missing_ok=True)
     _, options, _, _ = example_options(command[3:])
@@ -632,7 +643,7 @@ def example_lcov(command, out, args):
             kept.append(line)
         if line.strip() == 'end_of_record':
             keep = False
-    out.write_text(merge_lcov([out.read_text(), ''.join(kept)]))
+    out.write_text(merge_lcov([primary, ''.join(kept)]))
     return 0
 
 
