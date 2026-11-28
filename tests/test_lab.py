@@ -671,7 +671,6 @@ fn settings_default_roundtrip_and_getter() {
             'build.rs': ('fn main() {\n    if std::env::var("NEVER_SET_X").is_ok() {\n'
                          '        println!("x");\n    }\n}\n',
                          None),
-            'examples/demo.rs': ('fn main() {\n    println!("{}", app::add(1, 2));\n}\n', None),
             'src/orphan.rs': (EXTRA, None),
             'src/tests/mod.rs': (EXTRA, '#[path = "tests/mod.rs"]\npub mod util;\n'),
         }
@@ -685,10 +684,15 @@ fn settings_default_roundtrip_and_getter() {
                 done = self.just('coverage-check')
                 self.assertNotEqual(done.returncode, 0, self.out(done))
                 self.assertIn(path, done.stdout)
-        self.reset()
-        (self.dir / 'tests/more.rs').write_text(API_TEST.replace('add_works', 'more_works'))
-        done = self.just('coverage-check')
-        self.assertEqual(done.returncode, 0, self.out(done))
+        # An example, like a test, is no code to cover: cargo llvm-cov leaves both folders out of its report.
+        for path, text in (('tests/more.rs', API_TEST.replace('add_works', 'more_works')),
+                           ('examples/demo.rs', 'fn main() {\n    println!("{}", app::add(1, 2));\n}\n')):
+            with self.subTest(path=path):
+                self.reset()
+                (self.dir / path).parent.mkdir(parents=True, exist_ok=True)
+                (self.dir / path).write_text(text)
+                done = self.just('coverage-check')
+                self.assertEqual(done.returncode, 0, self.out(done))
 
     def test_code_behind_a_feature_counts_for_coverage_and_docs(self):
         (self.dir / 'Cargo.toml').write_text(CARGO + '\n[features]\nextra = []\n')
